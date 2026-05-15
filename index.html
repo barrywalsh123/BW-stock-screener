@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Asymmetric Stock Screener</title>
+<style>
+:root {
+  --bg:#080e1a; --surface:#0f1e2e; --card:#132033; --border:#1e3a52;
+  --text:#c8d8e8; --muted:#5a7a94; --accent:#38bdf8; --green:#22c55e;
+  --yellow:#eab308; --red:#ef4444; --orange:#f97316; --purple:#a855f7;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Inter','Segoe UI',sans-serif;font-size:13px;min-height:100vh;}
+
+/* HEADER */
+.header{background:linear-gradient(135deg,#0a1628 0%,#0f2040 100%);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;}
+.header-left h1{font-size:19px;font-weight:700;color:#e2f0ff;} .header-left h1 span{color:var(--accent);}
+.header-left p{color:var(--muted);font-size:11px;margin-top:2px;}
+.header-right{display:flex;align-items:center;gap:14px;}
+.last-updated{font-size:11px;color:var(--muted);}
+.btn{border:none;border-radius:6px;padding:8px 18px;font-weight:700;font-size:12px;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:6px;}
+.btn-refresh{background:var(--accent);color:#060e1a;} .btn-refresh:hover{background:#7dd3fc;transform:translateY(-1px);}
+.btn-refresh:disabled{background:var(--border);color:var(--muted);cursor:not-allowed;transform:none;}
+.btn svg{width:13px;height:13px;flex-shrink:0;}
+.spin{animation:spin .9s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* LOADING */
+#loading-overlay{position:fixed;inset:0;background:rgba(8,14,26,.93);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;}
+.loader-ring{width:54px;height:54px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:18px;}
+.loader-text{color:var(--accent);font-size:14px;font-weight:600;} .loader-sub{color:var(--muted);font-size:11px;margin-top:6px;}
+
+/* LAYOUT */
+.container{max-width:1640px;margin:0 auto;padding:0 20px;}
+section{padding:26px 0;} section+section{border-top:1px solid var(--border);}
+.section-title{font-size:15px;font-weight:700;color:#e2f0ff;margin-bottom:5px;display:flex;align-items:center;gap:7px;}
+.section-sub{color:var(--muted);font-size:11.5px;margin-bottom:18px;}
+.section-toggle-header{display:flex;align-items:flex-start;cursor:pointer;}
+.section-toggle-header:hover .section-title{color:var(--accent);}
+.chevron{transition:transform .2s;margin-left:8px;font-size:12px;} .chevron.open{transform:rotate(0);} .chevron.closed{transform:rotate(-90deg);}
+.collapsed{display:none!important;}
+
+/* METHOD CARDS */
+.method-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:13px;margin-top:14px;}
+.method-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;}
+.method-card h4{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px;}
+.method-card p,.method-card li{font-size:11.5px;color:#94b4cc;line-height:1.7;}
+.method-card ul{list-style:none;} .method-card li{padding-left:14px;position:relative;} .method-card li::before{content:'→';position:absolute;left:0;color:var(--accent);font-size:10px;}
+
+/* TREND CARDS */
+.trends-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:15px;}
+.trend-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.trend-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--tc);}
+.trend-card:hover{border-color:var(--tc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.4);}
+.tc-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
+.tc-icon{font-size:20px;} .tc-badge{background:rgba(255,255,255,.07);border-radius:20px;padding:2px 9px;font-size:10px;color:var(--muted);}
+.tc-name{font-size:13px;font-weight:700;color:#e2f0ff;margin-bottom:5px;}
+.tc-desc{font-size:11px;color:#8aacbf;line-height:1.6;margin-bottom:10px;}
+.tc-bottleneck{background:rgba(0,0,0,.25);border-left:3px solid var(--tc);padding:8px 10px;border-radius:0 5px 5px 0;margin-bottom:10px;}
+.tc-bl-label{font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:var(--tc);font-weight:700;margin-bottom:3px;}
+.tc-bl-text{font-size:10.5px;color:#94b4cc;line-height:1.5;}
+.tc-catalysts{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;}
+.cat-tag{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:2px 7px;font-size:9.5px;color:var(--muted);}
+.tc-footer{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:8px;}
+.tc-count{font-size:10.5px;color:var(--muted);} .tc-top{font-size:10.5px;} .tc-top span{color:var(--tc);font-weight:700;}
+
+/* FILTER BAR */
+.filter-bar{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:13px;}
+.filter-group{display:flex;flex-direction:column;gap:6px;}
+.filter-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700;}
+.filter-pills{display:flex;flex-wrap:wrap;gap:5px;}
+.pill{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:3px 11px;font-size:11px;color:var(--muted);cursor:pointer;transition:all .15s;white-space:nowrap;}
+.pill:hover{border-color:var(--accent);color:var(--text);}
+.pill.active{background:var(--accent);color:#060e1a;border-color:var(--accent);font-weight:700;}
+.filter-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.search-box{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:5px 11px;color:var(--text);font-size:12px;outline:none;width:175px;}
+.search-box:focus{border-color:var(--accent);} .search-box::placeholder{color:var(--muted);}
+.result-count{font-size:11px;color:var(--muted);white-space:nowrap;}
+
+/* STATS BAR */
+.stats-bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+.stat-chip{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 14px;display:flex;flex-direction:column;gap:2px;}
+.stat-val{font-size:19px;font-weight:700;color:var(--accent);line-height:1;} .stat-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;}
+
+/* TABLE */
+.table-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--border);}
+table{width:100%;border-collapse:collapse;white-space:nowrap;}
+thead th{background:#0a1628;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.7px;padding:9px 11px;text-align:left;cursor:pointer;user-select:none;position:sticky;top:0;border-bottom:1px solid var(--border);}
+thead th:hover{color:var(--accent);}
+thead th.sorted .sort-arrow{opacity:1;color:var(--accent);}
+.sort-arrow{margin-left:3px;opacity:.3;}
+tbody tr.data-row{border-bottom:1px solid rgba(30,58,82,.35);cursor:pointer;transition:background .1s;}
+tbody tr.data-row:hover{background:rgba(56,189,248,.04);}
+tbody tr.detail-row td{padding:0;border-bottom:1px solid var(--border);}
+td{padding:8px 11px;font-size:12px;vertical-align:middle;}
+
+/* TABLE CELLS */
+.cell-ticker{font-weight:800;font-size:13px;color:var(--accent);letter-spacing:.4px;}
+.cell-name{max-width:150px;overflow:hidden;text-overflow:ellipsis;color:#94b4cc;font-size:11px;}
+.trend-pill{display:inline-block;border-radius:20px;padding:2px 8px;font-size:10px;font-weight:600;}
+.cell-num{text-align:right;font-variant-numeric:tabular-nums;}
+.cell-na{color:var(--muted);text-align:right;}
+.score-bar{display:flex;align-items:center;gap:5px;}
+.score-num{width:30px;text-align:right;font-weight:700;font-size:11.5px;}
+.score-track{flex:1;height:5px;background:rgba(255,255,255,.08);border-radius:3px;min-width:44px;}
+.score-fill{height:100%;border-radius:3px;}
+.badge{display:inline-flex;align-items:center;gap:2px;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;}
+.badge-yes{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);}
+.badge-no{background:rgba(239,68,68,.1);color:#f87171;border:1px solid rgba(239,68,68,.25);}
+.partner-chips{display:flex;flex-wrap:wrap;gap:3px;max-width:190px;}
+.p-chip{border-radius:3px;padding:1px 5px;font-size:9px;font-weight:600;}
+.p-chip-hyper{background:rgba(56,189,248,.15);color:#7dd3fc;}
+.p-chip-def{background:rgba(239,68,68,.13);color:#fca5a5;}
+.p-chip-other{background:rgba(255,255,255,.07);color:var(--muted);}
+.overall-score{font-size:16px;font-weight:800;}
+.s-hi{color:var(--green);} .s-mid{color:var(--yellow);} .s-lo{color:var(--red);}
+.expand-btn{background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.2);border-radius:4px;color:var(--accent);cursor:pointer;font-size:11px;padding:2px 7px;font-weight:600;transition:all .15s;}
+.expand-btn:hover{background:rgba(56,189,248,.2);}
+
+/* DETAIL PANEL */
+.detail-panel{background:#0b1827;border-top:1px solid var(--border);padding:18px 22px;}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+.detail-block{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;}
+.detail-block h4{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700;margin-bottom:10px;}
+.comp-peer-list{display:flex;flex-wrap:wrap;gap:6px;}
+.comp-peer{background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.2);border-radius:4px;padding:3px 9px;font-size:11px;font-weight:700;color:var(--accent);}
+.comp-leader-item{display:flex;flex-direction:column;gap:2px;padding:7px 0;border-bottom:1px solid rgba(30,58,82,.5);}
+.comp-leader-item:last-child{border-bottom:none;}
+.comp-leader-top{display:flex;align-items:center;gap:6px;}
+.comp-leader-name{font-size:12px;font-weight:700;color:#e2f0ff;}
+.comp-leader-ticker{background:rgba(255,255,255,.07);border-radius:3px;padding:1px 5px;font-size:10px;color:var(--muted);}
+.comp-leader-note{font-size:11px;color:#6a8fa8;line-height:1.4;}
+.comp-edge-text{font-size:12px;color:#94b4cc;line-height:1.65;}
+.comp-acquirer-list{display:flex;flex-wrap:wrap;gap:5px;}
+.comp-acquirer{background:rgba(168,85,247,.1);border:1px solid rgba(168,85,247,.2);border-radius:4px;padding:3px 8px;font-size:11px;color:#c084fc;}
+
+/* COLUMN TOGGLES */
+.col-toggles{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:11px;align-items:center;}
+.col-toggle-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-right:4px;}
+
+/* ── ON THE RADAR ── */
+.radar-intro{background:linear-gradient(135deg,#1a0f2e,#0f1e2e);border:1px solid #2d1f4e;border-radius:10px;padding:16px 20px;margin-bottom:20px;}
+.radar-intro h3{font-size:13px;font-weight:700;color:#c084fc;margin-bottom:6px;}
+.radar-intro p{font-size:11.5px;color:#8a7aac;line-height:1.7;}
+.radar-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:15px;}
+.radar-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:all .2s;}
+.radar-card:hover{border-color:#6d28d9;transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.4);}
+.radar-card-header{padding:14px 16px 10px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;}
+.radar-ticker-block{}
+.radar-ticker{font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:.5px;}
+.radar-name{font-size:11px;color:var(--muted);margin-top:2px;}
+.radar-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;}
+.radar-trend-pill{border-radius:20px;padding:2px 9px;font-size:10px;font-weight:600;}
+.spec-badge{border-radius:4px;padding:2px 7px;font-size:10px;font-weight:700;}
+.spec-low{background:rgba(34,197,94,.12);color:#4ade80;border:1px solid rgba(34,197,94,.25);}
+.spec-moderate{background:rgba(234,179,8,.12);color:#fbbf24;border:1px solid rgba(234,179,8,.25);}
+.spec-high{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.25);}
+.radar-live{display:flex;gap:10px;padding:10px 16px;background:rgba(0,0,0,.2);border-bottom:1px solid var(--border);}
+.radar-live-item{display:flex;flex-direction:column;gap:1px;}
+.rl-label{font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);}
+.rl-val{font-size:13px;font-weight:700;color:#e2f0ff;}
+.radar-body{padding:14px 16px;}
+.radar-thesis{font-size:11.5px;color:#94b4cc;line-height:1.65;margin-bottom:12px;}
+.radar-row{display:flex;gap:8px;margin-bottom:8px;}
+.radar-label{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:700;white-space:nowrap;min-width:70px;padding-top:2px;}
+.radar-value{font-size:11.5px;color:#94b4cc;line-height:1.55;}
+.radar-value.catalyst{color:#fbbf24;}
+.radar-value.asymmetric{color:#c084fc;font-style:italic;}
+.radar-value.risk{color:#f87171;}
+.radar-backing-chips{display:flex;flex-wrap:wrap;gap:4px;}
+.radar-backing-chip{background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.2);border-radius:3px;padding:2px 7px;font-size:10px;color:#7dd3fc;}
+.radar-footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,.15);}
+.rf-score-label{font-size:10px;color:var(--muted);}
+.rf-score-val{font-size:15px;font-weight:800;}
+
+/* SECTOR BREAKDOWN */
+.sector-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:13px;}
+.sector-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:15px;}
+.sector-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;}
+.sector-name{font-size:13px;font-weight:700;color:#e2f0ff;}
+.sector-avg{font-size:13px;font-weight:800;}
+.sector-stocks{display:flex;flex-wrap:wrap;gap:6px;}
+.st{display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:5px;padding:3px 8px;}
+.st-ticker{font-size:11px;font-weight:700;} .st-score{font-size:10px;color:var(--muted);}
+
+@media(max-width:900px){.detail-grid{grid-template-columns:1fr 1fr;} .radar-grid{grid-template-columns:1fr;}}
+@media(max-width:600px){.header{flex-direction:column;gap:10px;align-items:flex-start;} .filter-bar{flex-direction:column;} .filter-right{margin-left:0;} .detail-grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>⚡ <span>Asymmetric</span> Stock Screener</h1>
+    <p>Live data · Trend-driven · Bottleneck identification · Comps &amp; Competitors · Pre-breakout Radar</p>
+  </div>
+  <div class="header-right">
+    <div class="last-updated" id="last-updated">—</div>
+    <button class="btn btn-refresh" id="btn-refresh" onclick="loadData()">
+      <svg id="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+      </svg>
+      Refresh Live Data
+    </button>
+  </div>
+</div>
+
+<div id="loading-overlay">
+  <div class="loader-ring"></div>
+  <div class="loader-text">Scanning markets...</div>
+  <div class="loader-sub" id="loader-msg">Fetching live data + option chains for the full universe — main screener, radar, backlog &amp; unusual options flow</div>
+</div>
+
+<div class="container" id="main-content" style="display:none">
+
+<!-- METHODOLOGY -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('method','chevron-method')">
+    <div>
+      <div class="section-title">🧭 Identification Framework <span class="chevron open" id="chevron-method">▾</span></div>
+      <div class="section-sub">How trends and bottlenecks are identified — and why asymmetric positioning matters more than fundamentals</div>
+    </div>
+  </div>
+  <div id="section-method">
+    <div class="method-grid">
+      <div class="method-card">
+        <h4>1 · Trend → Bottleneck Mapping</h4>
+        <p>We identify 2–4 year mega-trends, then locate the <strong>physical or structural bottleneck</strong> each trend creates. The company that solves or enables the bottleneck captures disproportionate value. Example: AI training needs power → grid is the bottleneck → nuclear SMR companies win.</p>
+      </div>
+      <div class="method-card">
+        <h4>2 · Quantitative Screening</h4>
+        <ul>
+          <li>Market Cap &lt; $35B — asymmetric upside room</li>
+          <li>Cash Runway &gt; 12 months — avoids dilution risk</li>
+          <li>Cash / Market Cap &gt; 8% — balance sheet margin of safety</li>
+          <li>Revenue Growth momentum — acceleration = PMF signal</li>
+          <li>Gross Margins — high margins = software-like scalability</li>
+          <li>Beta, Short Interest — volatility and contrarian signals</li>
+        </ul>
+      </div>
+      <div class="method-card">
+        <h4>3 · Qualitative Scoring</h4>
+        <ul>
+          <li><strong>TAM Growth (10%):</strong> Is the addressable market expanding?</li>
+          <li><strong>Partnership (12%):</strong> Hyperscaler / Defense Prime relationships = de-risked pipeline</li>
+          <li><strong>Innovation (12%):</strong> R&amp;D intensity + technology pivot optionality</li>
+          <li><strong>Scalability (10%):</strong> Can they fulfill large orders? Margin structure?</li>
+        </ul>
+      </div>
+      <div class="method-card">
+        <h4>4 · Comps &amp; Competitor Analysis</h4>
+        <p>Each recommendation is mapped against: <strong>direct peers</strong> (same stage/size), <strong>industry leaders</strong> (giants they compete with or ride), and <strong>potential acquirers</strong>. Click any row in the screener to expand its full competitive landscape. Acquisition premium potential is explicitly evaluated.</p>
+      </div>
+      <div class="method-card">
+        <h4>5 · On The Radar</h4>
+        <p>A separate watchlist of <strong>pre-breakout</strong> companies — too early or too small to meet all criteria today, but positioned at key bottlenecks with catalysts that could trigger institutional discovery. These are the low-volume, micro/small-cap ideas where <em>one large contract or investment announcement = the re-rating event</em>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TREND CARDS -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('trends','chevron-trends')">
+    <div>
+      <div class="section-title">📡 Identified Trends &amp; Bottlenecks <span class="chevron open" id="chevron-trends">▾</span></div>
+      <div class="section-sub">Click any card to filter the screener to that trend</div>
+    </div>
+  </div>
+  <div id="section-trends">
+    <div class="trends-grid" id="trends-grid"></div>
+  </div>
+</section>
+
+<!-- SCREENER TABLE -->
+<section>
+  <div class="section-title">📊 Live Screener — Click any row to expand comps &amp; competitors</div>
+  <div class="section-sub">All companies scored across 8 criteria with live data. Sort any column. Expand rows for competitive landscape.</div>
+
+  <div id="error-banner" style="display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 14px;font-size:11.5px;color:#fca5a5;margin-bottom:14px;"></div>
+  <div class="stats-bar" id="stats-bar"></div>
+
+  <div class="filter-bar">
+    <div class="filter-group">
+      <div class="filter-label">Trend</div>
+      <div class="filter-pills" id="trend-filters"></div>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Market Cap</div>
+      <div class="filter-pills" id="mcap-filters">
+        <span class="pill active" onclick="setFilter('mcap','all',this)">All</span>
+        <span class="pill" onclick="setFilter('mcap','micro',this)">&lt; $1B</span>
+        <span class="pill" onclick="setFilter('mcap','small',this)">$1B–$7B</span>
+        <span class="pill" onclick="setFilter('mcap','mid',this)">$7B–$35B</span>
+        <span class="pill" onclick="setFilter('mcap','large',this)">&gt; $35B</span>
+      </div>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Criteria Met</div>
+      <div class="filter-pills" id="crit-filters">
+        <span class="pill active" onclick="setFilter('crit','any',this)">Any</span>
+        <span class="pill" onclick="setFilter('crit','mcap',this)">MCap &lt;35B</span>
+        <span class="pill" onclick="setFilter('crit','runway',this)">Runway &gt;12mo</span>
+        <span class="pill" onclick="setFilter('crit','cash',this)">Cash Rich</span>
+        <span class="pill" onclick="setFilter('crit','all3',this)">All 3 ✓</span>
+      </div>
+    </div>
+    <div class="filter-right">
+      <input class="search-box" id="search-box" placeholder="Search ticker or name..." oninput="renderTable()" />
+      <div class="result-count" id="result-count"></div>
+    </div>
+  </div>
+
+  <div class="col-toggles">
+    <span class="col-toggle-label">Show:</span>
+    <span class="pill active" onclick="toggleColGroup('quant',this)">Quantitative</span>
+    <span class="pill active" onclick="toggleColGroup('qual',this)">Qualitative</span>
+    <span class="pill active" onclick="toggleColGroup('partners',this)">Partners</span>
+    <span class="pill active" onclick="toggleColGroup('scores',this)">Sub-scores</span>
+    <span class="pill active" onclick="toggleColGroup('forward',this)">Forward (Backlog · Calls)</span>
+  </div>
+
+  <div class="table-wrap">
+    <table id="stock-table">
+      <thead><tr id="table-head"></tr></thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ON THE RADAR -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('radar','chevron-radar')">
+    <div>
+      <div class="section-title">🔭 On The Radar — Pre-Breakout Positioning <span class="chevron open" id="chevron-radar">▾</span></div>
+      <div class="section-sub">Low-volume micro/small caps positioned at key bottlenecks — click any row for thesis, catalyst &amp; risk</div>
+    </div>
+  </div>
+  <div id="section-radar">
+    <div class="radar-intro">
+      <h3>⚠️ What Is This Section?</h3>
+      <p>These companies do not yet meet all screening criteria — they may be pre-revenue, burning cash, or simply too small for institutional coverage. That is exactly the point. The goal is to identify <strong>before institutional discovery</strong>: low float, low volume stocks that are directly positioned at a structural bottleneck. When a hyperscaler partnership, government contract, or regulatory milestone hits, institutions arrive simultaneously — and the stock reprices violently upward.</p>
+    </div>
+    <div class="result-count" id="radar-count" style="margin-bottom:10px;"></div>
+    <div class="table-wrap">
+      <table id="radar-table">
+        <thead><tr id="radar-head"></tr></thead>
+        <tbody id="radar-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- BACKLOG / MARKET-CAP -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('backlog','chevron-backlog')">
+    <div>
+      <div class="section-title">📦 High Backlog / Market-Cap Ratio <span class="chevron open" id="chevron-backlog">▾</span></div>
+      <div class="section-sub">Backlog (or RPO) ≥ 30% of market cap — signals locked-in revenue growth and adoption inflection in the next 1–3 years</div>
+    </div>
+  </div>
+  <div id="section-backlog">
+    <div class="radar-intro" style="background:linear-gradient(135deg,#0f2e1a,#0f1e2e);border-color:#1f4e2d;">
+      <h3 style="color:#4ade80;">💡 Why This Matters</h3>
+      <p style="color:#7aac8a;">A company sitting on backlog several times its market cap has <strong>already sold</strong> revenue the market has not yet priced in. As that backlog converts, revenue accelerates, margins scale, and re-rating follows. This screen flags companies where the ratio implies disproportionate forward growth versus current enterprise value. Backlog figures are sourced from the latest 10-K / 10-Q / earnings call — ratios update live with market cap.</p>
+    </div>
+    <div class="result-count" id="backlog-count" style="margin-bottom:10px;"></div>
+    <div class="table-wrap">
+      <table id="backlog-table">
+        <thead><tr id="backlog-head"></tr></thead>
+        <tbody id="backlog-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- UNUSUAL CALL VOLUME -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('calls','chevron-calls')">
+    <div>
+      <div class="section-title">📞 Abnormal Call Volume — Bullish Options Flow <span class="chevron open" id="chevron-calls">▾</span></div>
+      <div class="section-sub">Nearest-expiry call volume ≥ 0.5× open interest with skew bullish (P/C &lt; 0.75) — often precedes upside moves or earnings beats</div>
+    </div>
+  </div>
+  <div id="section-calls">
+    <div class="radar-intro" style="background:linear-gradient(135deg,#2e1a0f,#0f1e2e);border-color:#4e2d1f;">
+      <h3 style="color:#fbbf24;">⚡ Why Smart Money Watches This</h3>
+      <p style="color:#ac8a7a;">When today's call volume blows past existing open interest <em>and</em> the put/call ratio is skewed bullish, someone is positioning aggressively for an imminent move. Common triggers: pending earnings beat, contract announcement, regulatory milestone, M&amp;A rumor. Live nearest-expiry option chains are pulled per refresh — read this as a positioning signal, not a recommendation. Always confirm with fundamentals.</p>
+    </div>
+    <div class="result-count" id="calls-count" style="margin-bottom:10px;"></div>
+    <div class="table-wrap">
+      <table id="calls-table">
+        <thead><tr id="calls-head"></tr></thead>
+        <tbody id="calls-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- SECTOR BREAKDOWN -->
+<section>
+  <div class="section-toggle-header" onclick="toggleSection('sector','chevron-sector')">
+    <div>
+      <div class="section-title">🗂️ Sector Breakdown <span class="chevron open" id="chevron-sector">▾</span></div>
+      <div class="section-sub">Average asymmetric score per trend with all tickers ranked</div>
+    </div>
+  </div>
+  <div id="section-sector">
+    <div class="sector-grid" id="sector-grid"></div>
+  </div>
+</section>
+
+</div><!-- /container -->
+
+<script>
+// ── STATE ──
+let allStocks = [], allTrends = [], allRadar = [], allBacklog = [], allUnusualCalls = [];
+let trendColors = {};
+let sortState = {
+  main:    { col: 'overall_score',   dir: 'desc' },
+  radar:   { col: 'overall_score',   dir: 'desc' },
+  backlog: { col: 'backlog_to_mcap', dir: 'desc' },
+  calls:   { col: 'vol_oi_ratio',    dir: 'desc' },
+};
+let filters = { trend: 'all', mcap: 'all', crit: 'any' };
+let colGroups = { quant: true, qual: true, partners: true, scores: true, forward: true };
+let expandedRows = { main: new Set(), radar: new Set(), backlog: new Set(), calls: new Set() };
+let currentStocks = [];
+
+// ── COLUMNS ──
+const COLS = [
+  { key:'expand',          label:'',            group:'core',     nosort:true, render: (_,idx) => `<button class="expand-btn" onclick="event.stopPropagation();toggleDetail(${idx})">▶ Comps</button>` },
+  { key:'ticker',          label:'Ticker',      group:'core',     render: r => `<span class="cell-ticker">${r.ticker}</span>` },
+  { key:'name',            label:'Company',     group:'core',     render: r => `<span class="cell-name" title="${r.name||''}">${r.name||''}</span>` },
+  { key:'trend',           label:'Trend',       group:'core',     render: r => { const c=trendColors[r.trend]||'#6366f1'; return `<span class="trend-pill" style="background:${c}22;color:${c};border:1px solid ${c}44">${(r.trend||'').replace('&','&amp;')}</span>`; }},
+  { key:'price',           label:'Price',       group:'quant',    render: r => r.price ? `$${r.price}` : '<span class="cell-na">—</span>' },
+  { key:'market_cap_b',    label:'MCap $B',     group:'quant',    render: r => { const c=r.market_cap_b<35?'s-hi':r.market_cap_b<75?'s-mid':'s-lo'; return `<span class="${c} cell-num">$${r.market_cap_b||'—'}B</span>`; }},
+  { key:'pct_of_52wh',     label:'52Wk Hi%',    group:'quant',    render: r => { if(!r.pct_of_52wh) return '<span class="cell-na cell-num">—</span>'; const c=r.pct_of_52wh>85?'s-lo':r.pct_of_52wh>65?'s-mid':'s-hi'; return `<span class="${c} cell-num">${r.pct_of_52wh}%</span>`; }},
+  { key:'beta',            label:'Beta',        group:'quant',    render: r => r.beta ? `<span class="cell-num">${r.beta}</span>` : '<span class="cell-na cell-num">—</span>' },
+  { key:'cash_runway',     label:'Runway',      group:'quant',    render: r => { const raw=r.cash_runway_raw; const c=raw>=9999?'s-hi':raw>=18?'s-hi':raw>=12?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.cash_runway||'—'}</span>`; }},
+  { key:'cash_to_mcap',    label:'Cash/MCap',   group:'quant',    render: r => { const c=r.cash_to_mcap>=15?'s-hi':r.cash_to_mcap>=8?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.cash_to_mcap}%</span>`; }},
+  { key:'net_cash_to_mcap',label:'NetCash/MC',  group:'quant',    render: r => { const c=r.net_cash_to_mcap>0?'s-hi':'s-lo'; return `<span class="${c} cell-num">${r.net_cash_to_mcap}%</span>`; }},
+  { key:'revenue_growth',  label:'RevGrowth',   group:'quant',    render: r => { if(r.revenue_growth==null) return '<span class="cell-na cell-num">—</span>'; const c=r.revenue_growth>=30?'s-hi':r.revenue_growth>=10?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.revenue_growth}%</span>`; }},
+  { key:'gross_margin',    label:'GrossMgn',    group:'quant',    render: r => { if(r.gross_margin==null) return '<span class="cell-na cell-num">—</span>'; const c=r.gross_margin>=60?'s-hi':r.gross_margin>=35?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.gross_margin}%</span>`; }},
+  { key:'op_margin',       label:'OpMgn',       group:'quant',    render: r => { if(r.op_margin==null) return '<span class="cell-na cell-num">—</span>'; const c=r.op_margin>=0?'s-hi':'s-lo'; return `<span class="${c} cell-num">${r.op_margin}%</span>`; }},
+  { key:'ev_rev',          label:'EV/Rev',      group:'quant',    render: r => r.ev_rev ? `<span class="cell-num">${r.ev_rev}×</span>` : '<span class="cell-na cell-num">—</span>' },
+  { key:'rd_pct',          label:'R&D%',        group:'quant',    render: r => { if(!r.rd_pct) return '<span class="cell-na cell-num">—</span>'; const c=r.rd_pct>=20?'s-hi':'s-mid'; return `<span class="${c} cell-num">${r.rd_pct}%</span>`; }},
+  { key:'short_pct',       label:'Short%',      group:'quant',    render: r => { if(!r.short_pct) return '<span class="cell-na cell-num">—</span>'; const c=r.short_pct>=15?'s-lo':'s-mid'; return `<span class="${c} cell-num">${r.short_pct}%</span>`; }},
+  { key:'hyperscalers',    label:'Hyperscalers',group:'partners', render: r => { const chips=(r.hyperscalers||[]).map(h=>`<span class="p-chip p-chip-hyper">${h}</span>`).join(''); return `<div class="partner-chips">${chips||'<span class="cell-na">—</span>'}</div>`; }},
+  { key:'defense_partners',label:'Defense',     group:'partners', render: r => { const chips=(r.defense_partners||[]).map(h=>`<span class="p-chip p-chip-def">${h}</span>`).join(''); return `<div class="partner-chips">${chips||'<span class="cell-na">—</span>'}</div>`; }},
+  { key:'tam_score',       label:'TAM',         group:'qual',     render: r => scoreBar(r.tam_score) },
+  { key:'innovation_score',label:'Innovation',  group:'qual',     render: r => scoreBar(r.innovation_score) },
+  { key:'meets_mcap',      label:'MCap<35B',    group:'scores',   render: r => badge(r.meets_mcap) },
+  { key:'meets_runway',    label:'Runway>12',   group:'scores',   render: r => badge(r.meets_runway) },
+  { key:'meets_cash',      label:'Cash Rich',   group:'scores',   render: r => badge(r.meets_cash) },
+  { key:'mcap_score',      label:'MCap Sc.',    group:'scores',   render: r => scoreBar(r.mcap_score) },
+  { key:'runway_score',    label:'Runway Sc.',  group:'scores',   render: r => scoreBar(r.runway_score) },
+  { key:'cash_score',      label:'Cash Sc.',    group:'scores',   render: r => scoreBar(r.cash_score) },
+  { key:'growth_score',    label:'Growth Sc.',  group:'scores',   render: r => scoreBar(r.growth_score) },
+  { key:'scal_score',      label:'Scale Sc.',   group:'scores',   render: r => scoreBar(r.scal_score) },
+  { key:'partnership_score',label:'Partner Sc.',group:'scores',   render: r => scoreBar(r.partnership_score) },
+  { key:'backlog_b',       label:'Backlog $B',  group:'forward',  render: r => r.backlog_b!=null && r.backlog_b>0 ? `<span class="cell-num">$${r.backlog_b}B</span>` : '<span class="cell-na cell-num">—</span>' },
+  { key:'backlog_to_mcap', label:'Backlog/MC',  group:'forward',  render: r => { if(r.backlog_to_mcap==null) return '<span class="cell-na cell-num">—</span>'; const c=r.backlog_to_mcap>=100?'s-hi':r.backlog_to_mcap>=30?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.backlog_to_mcap}%</span>`; }},
+  { key:'call_volume',     label:'Call Vol',    group:'forward',  render: r => r.call_volume!=null ? `<span class="cell-num">${r.call_volume.toLocaleString()}</span>` : '<span class="cell-na cell-num">—</span>' },
+  { key:'vol_oi_ratio',    label:'Vol/OI',      group:'forward',  render: r => { if(r.vol_oi_ratio==null) return '<span class="cell-na cell-num">—</span>'; const c=r.vol_oi_ratio>=1?'s-hi':r.vol_oi_ratio>=0.5?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.vol_oi_ratio}×</span>`; }},
+  { key:'put_call_ratio',  label:'P/C',         group:'forward',  render: r => { if(r.put_call_ratio==null) return '<span class="cell-na cell-num">—</span>'; const c=r.put_call_ratio<=0.6?'s-hi':r.put_call_ratio<=1?'s-mid':'s-lo'; return `<span class="${c} cell-num">${r.put_call_ratio}</span>`; }},
+  { key:'overall_score',   label:'⭐ Score',    group:'core',     render: r => { const c=r.overall_score>=75?'#22c55e':r.overall_score>=60?'#eab308':'#ef4444'; return `<span class="overall-score" style="color:${c}">${r.overall_score}</span>`; }},
+];
+
+function scoreBar(val) {
+  if (val==null) return '<span class="cell-na">—</span>';
+  const c = val>=75?'#22c55e':val>=55?'#eab308':'#ef4444';
+  return `<div class="score-bar"><span class="score-num" style="color:${c}">${val}</span><div class="score-track"><div class="score-fill" style="width:${val}%;background:${c}"></div></div></div>`;
+}
+function badge(val) {
+  return val ? `<span class="badge badge-yes">✓ Yes</span>` : `<span class="badge badge-no">✗ No</span>`;
+}
+function visibleCols() {
+  return COLS.filter(c => c.group==='core' || colGroups[c.group]);
+}
+
+// ── LOAD ──
+async function loadData() {
+  const btn = document.getElementById('btn-refresh');
+  const icon = document.getElementById('refresh-icon');
+  btn.disabled = true; icon.classList.add('spin');
+  document.getElementById('loading-overlay').style.display = 'flex';
+  document.getElementById('main-content').style.display = 'none';
+  expandedRows.clear();
+
+  const msgs = ['Fetching live price data...','Pulling balance sheet data...','Calculating cash runways...','Scoring partnerships...','Building asymmetric scores...','Analyzing radar watchlist...'];
+  let mi = 0;
+  const msgEl = document.getElementById('loader-msg');
+  const t = setInterval(() => { msgEl.textContent = msgs[mi++ % msgs.length]; }, 2600);
+
+  try {
+    const res = await fetch('/api/screen');
+    const data = await res.json();
+    clearInterval(t);
+
+    allStocks = data.stocks || [];
+    allTrends = data.trends || [];
+    allRadar  = data.radar_stocks || [];
+    allBacklog = data.backlog_stocks || [];
+    allUnusualCalls = data.unusual_call_stocks || [];
+    allTrends.forEach(tr => trendColors[tr.name] = tr.color);
+
+    document.getElementById('last-updated').textContent = 'Updated: ' + new Date(data.timestamp).toLocaleTimeString();
+
+    renderTrendCards();
+    renderTrendFilters();
+    renderStatsBar(data);
+    buildTableHead();
+    renderTable();
+    renderRadarSection();
+    renderBacklogSection();
+    renderUnusualCallsSection();
+    renderSectorBreakdown();
+
+    if (data.errors && data.errors.length) {
+      const eb = document.getElementById('error-banner');
+      eb.textContent = `Note: ${data.errors.length} ticker(s) had data issues: ${data.errors.slice(0,5).join('; ')}`;
+      eb.style.display = 'block';
+    }
+
+    document.getElementById('loading-overlay').style.display = 'none';
+    document.getElementById('main-content').style.display = 'block';
+  } catch(e) {
+    clearInterval(t);
+    msgEl.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false; icon.classList.remove('spin');
+  }
+}
+
+// ── TREND CARDS ──
+function renderTrendCards() {
+  document.getElementById('trends-grid').innerHTML = allTrends.map(t => `
+    <div class="trend-card" style="--tc:${t.color}" onclick="setFilter('trend','${t.name}',null)">
+      <div class="tc-header"><span class="tc-icon">${t.icon}</span><span class="tc-badge">${t.stock_count} stocks · avg ${t.avg_score}</span></div>
+      <div class="tc-name">${t.name}</div>
+      <div class="tc-desc">${t.description}</div>
+      <div class="tc-bottleneck"><div class="tc-bl-label">🔴 Key Bottleneck</div><div class="tc-bl-text">${t.bottleneck}</div></div>
+      <div class="tc-catalysts">${(t.catalysts||[]).map(c=>`<span class="cat-tag">${c}</span>`).join('')}</div>
+      <div class="tc-footer">
+        <span class="tc-count">${t.stock_count} companies identified</span>
+        ${t.top_pick?`<span class="tc-top">Top pick: <span>${t.top_pick}</span></span>`:''}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── TREND FILTER PILLS ──
+function renderTrendFilters() {
+  document.getElementById('trend-filters').innerHTML =
+    `<span class="pill active" onclick="setFilter('trend','all',this)">All Trends</span>` +
+    allTrends.map(t => `<span class="pill" onclick="setFilter('trend','${t.name}',this)">${t.icon} ${t.name}</span>`).join('');
+}
+
+function setFilter(type, val, pill) {
+  filters[type] = val;
+  const groupMap = { trend: 'trend-filters', mcap: 'mcap-filters', crit: 'crit-filters' };
+  const container = document.getElementById(groupMap[type]);
+  if (container) container.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  if (pill) pill.classList.add('active');
+  else if (container) {
+    // activate the matching pill by value
+    container.querySelectorAll('.pill').forEach(p => {
+      if (val === 'all' && p.textContent.includes('All')) p.classList.add('active');
+      else if (p.textContent.includes(val)) p.classList.add('active');
+    });
+  }
+  expandedRows.clear();
+  renderTable();
+}
+
+function toggleColGroup(group, pill) {
+  colGroups[group] = !colGroups[group];
+  pill.classList.toggle('active');
+  buildTableHead(); renderTable();
+  if (allRadar.length) renderRadarSection();
+  if (allBacklog.length) renderBacklogSection();
+  if (allUnusualCalls.length) renderUnusualCallsSection();
+}
+
+// ── STATS BAR ──
+function renderStatsBar(data) {
+  const s = allStocks;
+  const meetAll = s.filter(x => x.meets_mcap && x.meets_runway && x.meets_cash).length;
+  const avg = s.length ? (s.reduce((a,b) => a+b.overall_score,0)/s.length).toFixed(1) : 0;
+  const hyper = s.filter(x => (x.hyperscalers||[]).length>0).length;
+  document.getElementById('stats-bar').innerHTML = `
+    <div class="stat-chip"><div class="stat-val">${data.total_screened}</div><div class="stat-lbl">Main Screened</div></div>
+    <div class="stat-chip"><div class="stat-val">${data.total_returned}</div><div class="stat-lbl">Live Results</div></div>
+    <div class="stat-chip"><div class="stat-val">${meetAll}</div><div class="stat-lbl">Meet All 3 Criteria</div></div>
+    <div class="stat-chip"><div class="stat-val">${avg}</div><div class="stat-lbl">Avg Score</div></div>
+    <div class="stat-chip"><div class="stat-val">${hyper}</div><div class="stat-lbl">Hyperscaler-Backed</div></div>
+    <div class="stat-chip"><div class="stat-val">${allRadar.length}</div><div class="stat-lbl">Radar Watchlist</div></div>
+    <div class="stat-chip"><div class="stat-val">${allBacklog.length}</div><div class="stat-lbl">High Backlog/MC</div></div>
+    <div class="stat-chip"><div class="stat-val">${allUnusualCalls.length}</div><div class="stat-lbl">Unusual Call Flow</div></div>
+  `;
+}
+
+// ── TABLE HEAD ──
+function buildTableHead() {
+  buildHeadFor('table-head', visibleCols(), 'main');
+}
+function buildHeadFor(headId, cols, key) {
+  const tr = document.getElementById(headId);
+  const st = sortState[key];
+  tr.innerHTML = cols.map(col => `
+    <th onclick="${col.nosort?'':(`sortByKey('${key}','${col.key}')`+';event.stopPropagation()')}" class="${st.col===col.key?'sorted':''}">
+      ${col.label} ${col.nosort?'':(`<span class="sort-arrow">${st.col===col.key?(st.dir==='asc'?'▲':'▼'):'⇅'}</span>`)}
+    </th>
+  `).join('');
+}
+function sortByKey(tableKey, col) {
+  const st = sortState[tableKey];
+  if (st.col===col) st.dir = st.dir==='asc'?'desc':'asc';
+  else { st.col=col; st.dir='desc'; }
+  if (tableKey==='main') { buildTableHead(); renderTable(); }
+  else if (tableKey==='radar') renderRadarSection();
+  else if (tableKey==='backlog') renderBacklogSection();
+  else if (tableKey==='calls') renderUnusualCallsSection();
+}
+function sortStocks(stocks, st) {
+  return [...stocks].sort((a,b) => {
+    let va = a[st.col], vb = b[st.col];
+    if (va==null) va = st.dir==='asc' ? Infinity : -Infinity;
+    if (vb==null) vb = st.dir==='asc' ? Infinity : -Infinity;
+    if (typeof va==='string') va = va.toLowerCase();
+    if (typeof vb==='string') vb = vb.toLowerCase();
+    return st.dir==='asc' ? (va<vb?-1:va>vb?1:0) : (va>vb?-1:va<vb?1:0);
+  });
+}
+
+// ── TABLE RENDER ──
+function renderTable() {
+  const search = (document.getElementById('search-box')?.value||'').toLowerCase();
+  let stocks = [...allStocks];
+
+  if (filters.trend !== 'all') stocks = stocks.filter(s => s.trend === filters.trend);
+  if (filters.mcap === 'micro') stocks = stocks.filter(s => s.market_cap_b < 1);
+  else if (filters.mcap === 'small') stocks = stocks.filter(s => s.market_cap_b >= 1 && s.market_cap_b < 7);
+  else if (filters.mcap === 'mid') stocks = stocks.filter(s => s.market_cap_b >= 7 && s.market_cap_b < 35);
+  else if (filters.mcap === 'large') stocks = stocks.filter(s => s.market_cap_b >= 35);
+
+  if (filters.crit === 'mcap') stocks = stocks.filter(s => s.meets_mcap);
+  else if (filters.crit === 'runway') stocks = stocks.filter(s => s.meets_runway);
+  else if (filters.crit === 'cash') stocks = stocks.filter(s => s.meets_cash);
+  else if (filters.crit === 'all3') stocks = stocks.filter(s => s.meets_mcap && s.meets_runway && s.meets_cash);
+
+  if (search) stocks = stocks.filter(s =>
+    s.ticker.toLowerCase().includes(search) ||
+    (s.name||'').toLowerCase().includes(search) ||
+    (s.trend||'').toLowerCase().includes(search)
+  );
+
+  stocks = sortStocks(stocks, sortState.main);
+  currentStocks = stocks;
+  document.getElementById('result-count').textContent = `${stocks.length} companies`;
+  renderRows('table-body', stocks, visibleCols(), 'main', renderDetailPanel);
+}
+
+function renderRows(bodyId, stocks, cols, key, detailFn) {
+  const tbody = document.getElementById(bodyId);
+  const exp = expandedRows[key];
+  if (!stocks.length) {
+    tbody.innerHTML = `<tr><td colspan="${cols.length}" style="text-align:center;padding:40px;color:var(--muted)">No results</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = stocks.map((r, idx) => {
+    const open = exp.has(idx);
+    return `
+      <tr class="data-row" onclick="toggleDetailFor('${key}',${idx})">
+        ${cols.map(col => `<td>${col.render(r, idx)}</td>`).join('')}
+      </tr>
+      <tr class="detail-row" id="detail-${key}-${idx}" style="display:${open?'table-row':'none'}">
+        <td colspan="${cols.length}">${detailFn(r)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function toggleDetailFor(key, idx) {
+  const row = document.getElementById(`detail-${key}-${idx}`);
+  if (!row) return;
+  const exp = expandedRows[key];
+  if (exp.has(idx)) { exp.delete(idx); row.style.display='none'; }
+  else { exp.add(idx); row.style.display='table-row'; }
+  const btn = row.previousElementSibling?.querySelector('.expand-btn');
+  if (btn) btn.textContent = exp.has(idx) ? '▼ Comps' : '▶ Comps';
+}
+
+// Backwards-compat shims
+function sortBy(col) { sortByKey('main', col); }
+function toggleDetail(idx) { toggleDetailFor('main', idx); }
+
+// ── DETAIL PANEL (comps) ──
+function renderDetailPanel(r) {
+  const peers = r.comps_peers || [];
+  const leaders = r.comps_leaders || [];
+  const edge = r.comps_edge || '';
+  const acquirers = r.comps_acquirers || [];
+
+  const peersHtml = peers.length
+    ? peers.map(p => `<span class="comp-peer">${p}</span>`).join('')
+    : '<span style="color:var(--muted);font-size:11px;">No direct listed peers</span>';
+
+  const leadersHtml = leaders.length
+    ? leaders.map(l => `
+        <div class="comp-leader-item">
+          <div class="comp-leader-top">
+            <span class="comp-leader-name">${l.name}</span>
+            ${l.ticker && l.ticker!=='N/A' ? `<span class="comp-leader-ticker">${l.ticker}</span>` : ''}
+          </div>
+          <div class="comp-leader-note">${l.note}</div>
+        </div>
+      `).join('')
+    : '<span style="color:var(--muted);font-size:11px;">—</span>';
+
+  const edgeHtml = edge || '<span style="color:var(--muted);">—</span>';
+
+  const acqHtml = acquirers.length
+    ? acquirers.map(a => `<span class="comp-acquirer">${a}</span>`).join('')
+    : '<span style="color:var(--muted);font-size:11px;">—</span>';
+
+  const trendColor = trendColors[r.trend] || '#6366f1';
+
+  return `
+    <div class="detail-panel">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-size:16px;font-weight:800;color:#e2f0ff;">${r.ticker}</span>
+        <span style="font-size:12px;color:var(--muted);">${r.name||''}</span>
+        <span class="trend-pill" style="background:${trendColor}22;color:${trendColor};border:1px solid ${trendColor}44;">${r.trend||''}</span>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>📎 Direct Peers (Same Stage)</h4>
+          <div class="comp-peer-list" style="margin-bottom:12px;">${peersHtml}</div>
+          <h4 style="margin-top:12px;">🏆 Potential Acquirers</h4>
+          <div class="comp-acquirer-list">${acqHtml}</div>
+        </div>
+        <div class="detail-block">
+          <h4>🏛️ Industry Leaders / Giants</h4>
+          ${leadersHtml}
+        </div>
+        <div class="detail-block">
+          <h4>⚡ Competitive Edge vs. Leaders</h4>
+          <div class="comp-edge-text">${edgeHtml}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── RADAR DETAIL PANEL (thesis / catalyst / risk) ──
+function renderRadarDetail(r) {
+  const trendColor = trendColors[r.trend] || '#8b5cf6';
+  const specCls = { low:'spec-low', moderate:'spec-moderate', high:'spec-high' }[r.speculative] || 'spec-high';
+  const specLabel = { low:'Lower Risk', moderate:'Moderate Risk', high:'High Risk / Speculative' }[r.speculative] || 'Speculative';
+  const backingHtml = (r.backing||[]).map(b => `<span class="radar-backing-chip">${b}</span>`).join('');
+  return `
+    <div class="detail-panel">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+        <span style="font-size:16px;font-weight:800;color:#e2f0ff;">${r.ticker}</span>
+        <span style="font-size:12px;color:var(--muted);">${r.name||''}</span>
+        <span class="trend-pill" style="background:${trendColor}22;color:${trendColor};border:1px solid ${trendColor}44;">${r.trend||''}</span>
+        <span class="spec-badge ${specCls}">${specLabel}</span>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-block">
+          <h4>💡 Thesis</h4>
+          <div class="comp-edge-text">${r.thesis||'—'}</div>
+          ${backingHtml ? `<h4 style="margin-top:12px;">🤝 Backing</h4><div class="radar-backing-chips">${backingHtml}</div>` : ''}
+        </div>
+        <div class="detail-block">
+          <h4>🔴 Bottleneck Angle</h4>
+          <div class="comp-edge-text" style="margin-bottom:10px;">${r.bottleneck_angle||'—'}</div>
+          <h4>⚡ Catalyst</h4>
+          <div class="comp-edge-text" style="color:#fbbf24;margin-bottom:10px;">${r.catalyst||'—'}</div>
+          <h4>👁️ Watch For</h4>
+          <div class="comp-edge-text">${r.watch_for||'—'}</div>
+        </div>
+        <div class="detail-block">
+          <h4>💸 Why Low Volume</h4>
+          <div class="comp-edge-text" style="margin-bottom:10px;">${r.why_low_volume||'—'}</div>
+          <h4>⚠️ Risk</h4>
+          <div class="comp-edge-text" style="color:#f87171;margin-bottom:10px;">${r.risk||'—'}</div>
+          <h4>🎯 Asymmetric Case</h4>
+          <div class="comp-edge-text" style="color:#c084fc;font-style:italic;">${r.asymmetric_case||'—'}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── RADAR TABLE ──
+function renderRadarSection() {
+  document.getElementById('radar-count').textContent = `${allRadar.length} radar candidates`;
+  const cols = visibleCols();
+  buildHeadFor('radar-head', cols, 'radar');
+  const sorted = sortStocks(allRadar, sortState.radar);
+  renderRows('radar-body', sorted, cols, 'radar', renderRadarDetail);
+}
+
+// ── BACKLOG TABLE ──
+function renderBacklogSection() {
+  document.getElementById('backlog-count').textContent = `${allBacklog.length} companies with backlog ≥ 30% of market cap`;
+  const cols = visibleCols();
+  buildHeadFor('backlog-head', cols, 'backlog');
+  const sorted = sortStocks(allBacklog, sortState.backlog);
+  renderRows('backlog-body', sorted, cols, 'backlog', r => {
+    return allRadar.some(x => x.ticker === r.ticker) ? renderRadarDetail(r) : renderDetailPanel(r);
+  });
+}
+
+// ── UNUSUAL CALLS TABLE ──
+function renderUnusualCallsSection() {
+  document.getElementById('calls-count').textContent = `${allUnusualCalls.length} tickers with abnormal bullish call flow`;
+  const cols = visibleCols();
+  buildHeadFor('calls-head', cols, 'calls');
+  const sorted = sortStocks(allUnusualCalls, sortState.calls);
+  renderRows('calls-body', sorted, cols, 'calls', r => {
+    return allRadar.some(x => x.ticker === r.ticker) ? renderRadarDetail(r) : renderDetailPanel(r);
+  });
+}
+
+// (legacy card renderer — kept only so any old call sites don't blow up)
+function _legacyRadarCards() {
+  const fakeGrid = []; if (false) fakeGrid.push(allRadar.map(r => {
+    const trendColor = trendColors[r.trend] || '#8b5cf6';
+    const specCls = { low:'spec-low', moderate:'spec-moderate', high:'spec-high' }[r.speculative] || 'spec-high';
+    const specLabel = { low:'Lower Risk', moderate:'Moderate Risk', high:'High Risk / Speculative' }[r.speculative] || 'Speculative';
+    const scoreColor = r.overall_score>=70?'#22c55e':r.overall_score>=55?'#eab308':'#ef4444';
+
+    const backingHtml = (r.backing||[]).map(b => `<span class="radar-backing-chip">${b}</span>`).join('');
+
+    return `
+      <div class="radar-card">
+        <div class="radar-card-header">
+          <div class="radar-ticker-block">
+            <div class="radar-ticker">${r.ticker}</div>
+            <div class="radar-name">${(r.name||'').slice(0,40)}</div>
+          </div>
+          <div class="radar-meta">
+            <span class="radar-trend-pill" style="background:${trendColor}22;color:${trendColor};border:1px solid ${trendColor}44;">${r.trend||''}</span>
+            <span class="spec-badge ${specCls}">${specLabel}</span>
+          </div>
+        </div>
+        <div class="radar-live">
+          <div class="radar-live-item"><div class="rl-label">Price</div><div class="rl-val">${r.price ? '$'+r.price : '—'}</div></div>
+          <div class="radar-live-item"><div class="rl-label">MCap</div><div class="rl-val">${r.market_cap_b ? '$'+r.market_cap_b+'B' : '—'}</div></div>
+          <div class="radar-live-item"><div class="rl-label">Runway</div><div class="rl-val">${r.cash_runway||'—'}</div></div>
+          <div class="radar-live-item"><div class="rl-label">Rev Growth</div><div class="rl-val">${r.revenue_growth!=null ? r.revenue_growth+'%' : '—'}</div></div>
+          <div class="radar-live-item"><div class="rl-label">Gross Mgn</div><div class="rl-val">${r.gross_margin!=null ? r.gross_margin+'%' : '—'}</div></div>
+        </div>
+        <div class="radar-body">
+          <div class="radar-thesis">${r.thesis||''}</div>
+          <div class="radar-row"><div class="radar-label">🔴 Bottleneck</div><div class="radar-value">${r.bottleneck_angle||''}</div></div>
+          <div class="radar-row"><div class="radar-label">⚡ Catalyst</div><div class="radar-value catalyst">${r.catalyst||''}</div></div>
+          <div class="radar-row"><div class="radar-label">👁️ Watch For</div><div class="radar-value">${r.watch_for||''}</div></div>
+          <div class="radar-row"><div class="radar-label">💸 Vol. Reason</div><div class="radar-value">${r.why_low_volume||''}</div></div>
+          <div class="radar-row"><div class="radar-label">⚠️ Risk</div><div class="radar-value risk">${r.risk||''}</div></div>
+          <div class="radar-row"><div class="radar-label">🎯 Case</div><div class="radar-value asymmetric">${r.asymmetric_case||''}</div></div>
+          ${backingHtml ? `<div class="radar-row" style="margin-top:4px;"><div class="radar-label">🤝 Backing</div><div class="radar-backing-chips">${backingHtml}</div></div>` : ''}
+        </div>
+        <div class="radar-footer">
+          <span class="rf-score-label">Asymmetric Score</span>
+          <span class="rf-score-val" style="color:${scoreColor}">${r.overall_score}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── SECTOR BREAKDOWN ──
+function renderSectorBreakdown() {
+  document.getElementById('sector-grid').innerHTML = allTrends.map(t => {
+    const stocks = allStocks.filter(s => s.trend===t.name).sort((a,b)=>b.overall_score-a.overall_score);
+    const sc = t.avg_score>=70?'#22c55e':t.avg_score>=55?'#eab308':'#ef4444';
+    return `
+      <div class="sector-card">
+        <div class="sector-header">
+          <div class="sector-name">${t.icon} ${t.name}</div>
+          <div class="sector-avg" style="color:${sc}">${t.avg_score}</div>
+        </div>
+        <div class="sector-stocks">
+          ${stocks.map(s => `<div class="st"><span class="st-ticker" style="color:${t.color}">${s.ticker}</span><span class="st-score">${s.overall_score}</span></div>`).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── SECTION COLLAPSE ──
+function toggleSection(id, chevronId) {
+  const el = document.getElementById('section-'+id);
+  const ch = document.getElementById(chevronId);
+  if (!el) return;
+  const isOpen = !el.classList.contains('collapsed');
+  el.classList.toggle('collapsed');
+  if (ch) { ch.textContent = isOpen ? '▾' : '▾'; ch.classList.toggle('closed', isOpen); ch.classList.toggle('open', !isOpen); }
+}
+
+// ── INIT ──
+loadData();
+</script>
+</body>
+</html>
