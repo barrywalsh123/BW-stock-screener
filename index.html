@@ -148,8 +148,8 @@ td{padding:8px 12px;font-size:12px;vertical-align:middle;}
 .detail-panel{background:#0b1827;border-top:1px solid var(--border);padding:18px 22px;box-sizing:border-box;overflow:hidden;}
 .tv-chart-wrap{background:#0a1628;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px;height:560px;width:100%;}
 .tv-chart-wrap iframe{width:100% !important;height:100% !important;display:block;border:0;}
-.dp-toggle{display:inline-flex;gap:2px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px;margin-bottom:14px;}
-.dp-tab{background:transparent;border:none;color:var(--muted);font-size:11.5px;font-weight:700;padding:6px 14px;border-radius:6px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px;}
+.dp-toggle{display:flex;flex-wrap:wrap;gap:2px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px;margin-bottom:14px;}
+.dp-tab{background:transparent;border:none;color:var(--muted);font-size:11px;font-weight:700;padding:5px 12px;border-radius:6px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
 .dp-tab:hover{color:var(--text);}
 .dp-tab.active{background:var(--accent);color:#060e1a;}
 
@@ -294,6 +294,24 @@ td{padding:8px 12px;font-size:12px;vertical-align:middle;}
 .sq-about-body{font-size:13px;color:#94b4cc;line-height:1.8;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px;}
 .sq-comps-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px;}
 @media(max-width:700px){.sq-proj-grid,.sq-comps-grid{grid-template-columns:1fr;} .sq-stats-grid{grid-template-columns:1fr 1fr;}}
+/* ── DETAIL PANEL PROJECTION CARDS (clickable assumptions) ── */
+.dp-proj-grid{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+.dp-proj-card{flex:1;min-width:130px;border-radius:10px;border:1px solid var(--border);padding:14px 12px;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;user-select:none;}
+.dp-proj-card:hover{background:rgba(56,189,248,.06);}
+.dp-proj-card.expanded{border-color:currentColor;}
+.dp-proj-card-top{text-align:center;}
+.dp-proj-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:8px;}
+.dp-proj-price{font-size:20px;font-weight:900;line-height:1;margin-bottom:4px;}
+.dp-proj-pct{font-size:13px;font-weight:700;margin-bottom:6px;}
+.dp-proj-hint{font-size:9px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;}
+.dp-proj-reasoning{display:none;font-size:11px;line-height:1.6;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);color:#94b4cc;}
+.dp-proj-card.expanded .dp-proj-reasoning{display:block;}
+.dp-proj-methodology{font-size:10px;color:var(--muted);line-height:1.55;margin-bottom:14px;padding:8px 12px;background:rgba(56,189,248,.05);border-left:2px solid var(--accent);border-radius:0 6px 6px 0;}
+.dp-spec-box{margin-top:14px;padding:14px 16px;background:linear-gradient(135deg,rgba(56,189,248,.05),rgba(139,92,246,.07));border:1px solid rgba(139,92,246,.3);border-radius:10px;cursor:pointer;}
+.dp-spec-box:hover{border-color:rgba(139,92,246,.6);}
+.dp-spec-reasoning{display:none;font-size:11px;color:#b8a8d0;line-height:1.6;margin-top:10px;padding-top:10px;border-top:1px solid rgba(139,92,246,.2);}
+.dp-spec-box.expanded .dp-spec-reasoning{display:block;}
+
 /* OPTIMAL PLAY */
 .op-stance{border-radius:12px;padding:20px 22px;margin-bottom:22px;border:1px solid;}
 .op-stance.buy    {background:rgba(74,222,128,.07);border-color:rgba(74,222,128,.4);}
@@ -1363,7 +1381,7 @@ function expandFromButton(btn) {
   toggleDetailFor(m[1], parseInt(m[2], 10));
 }
 
-// ── DETAIL PANEL VIEW TOGGLE (indicators / technicals / thesis) ──
+// ── DETAIL PANEL VIEW TOGGLE (indicators / technicals / thesis / projections / play) ──
 function setDPView(btn, view) {
   const panel = btn.closest('.detail-panel');
   if (!panel) return;
@@ -1377,6 +1395,10 @@ function setDPView(btn, view) {
     panel.querySelectorAll('.tv-tech-wrap[data-tv-ticker]').forEach(mountTvTechnicals);
   } else if (view === 'thesis') {
     panel.querySelectorAll('.thesis-block[data-thesis-ticker]').forEach(mountThesisBlock);
+  } else if (view === 'projections') {
+    panel.querySelectorAll('.dp-proj-block[data-proj-ticker]').forEach(mountDPProjections);
+  } else if (view === 'play') {
+    panel.querySelectorAll('.dp-play-block[data-play-ticker]').forEach(mountDPOptimalPlay);
   }
 }
 
@@ -1470,6 +1492,231 @@ async function mountThesisBlock(wrap) {
   }
 }
 
+// ── DETAIL PANEL: PROJECTIONS TAB (lazy, per-ticker) ──
+function toggleDPProjCard(card) {
+  card.classList.toggle('expanded');
+}
+
+async function mountDPProjections(wrap) {
+  if (!wrap || wrap.dataset.mounted === '1') return;
+  const ticker = wrap.dataset.projTicker;
+  wrap.dataset.mounted = '1';
+  wrap.innerHTML = `<div style="padding:14px;color:var(--muted);font-size:12px;">Loading projections for ${ticker}…</div>`;
+  try {
+    const res = await fetch('/api/info/' + encodeURIComponent(ticker));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    const fp = d.projections && d.projections.fundamental;
+    const sp = d.projections && d.projections.speculative;
+    const cur = d.price ? `$${d.price}` : '—';
+    const pf  = p => p != null ? `${p >= 0 ? '+' : ''}${p}%` : '—';
+    const df  = p => p ? `$${p}` : '—';
+
+    let html = '';
+
+    // ── Our Model ──
+    if (fp) {
+      const modelLabel = {
+        pe_beat_miss:      'Beat/Miss vs Consensus · Forward P/E',
+        ev_revenue:        'EV/Revenue Multiple Model',
+        revenue_heuristic: 'Revenue Momentum Heuristic',
+        price_heuristic:   'Statistical Price Heuristic',
+      }[fp.model] || fp.model;
+
+      html += `
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+          <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;">🧮 Fundamental Model</h4>
+          <span style="font-size:10px;color:var(--accent);font-weight:700;">${modelLabel}</span>
+          <span style="font-size:10px;color:var(--muted);margin-left:auto;">Current: ${cur} · Click cards to see assumptions</span>
+        </div>
+        <div class="dp-proj-methodology">${fp.methodology_note}</div>
+        <div class="dp-proj-grid">
+          <div class="dp-proj-card" style="color:#f87171;" onclick="toggleDPProjCard(this)">
+            <div class="dp-proj-card-top">
+              <div class="dp-proj-label" style="color:#f87171;">🐻 Bear Case</div>
+              <div class="dp-proj-price" style="color:#f87171;">${df(fp.bear.price)}</div>
+              <div class="dp-proj-pct"   style="color:#f87171;">${pf(fp.bear.pct)}</div>
+              <div class="dp-proj-hint">tap for reasoning ▾</div>
+            </div>
+            <div class="dp-proj-reasoning">${fp.bear.reasoning}</div>
+          </div>
+          <div class="dp-proj-card" style="color:#fbbf24;" onclick="toggleDPProjCard(this)">
+            <div class="dp-proj-card-top">
+              <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Base Case</div>
+              <div class="dp-proj-price" style="color:#fbbf24;">${df(fp.base.price)}</div>
+              <div class="dp-proj-pct"   style="color:#fbbf24;">${pf(fp.base.pct)}</div>
+              <div class="dp-proj-hint">tap for reasoning ▾</div>
+            </div>
+            <div class="dp-proj-reasoning">${fp.base.reasoning}</div>
+          </div>
+          <div class="dp-proj-card" style="color:#4ade80;" onclick="toggleDPProjCard(this)">
+            <div class="dp-proj-card-top">
+              <div class="dp-proj-label" style="color:#4ade80;">🐂 Bull Case</div>
+              <div class="dp-proj-price" style="color:#4ade80;">${df(fp.bull.price)}</div>
+              <div class="dp-proj-pct"   style="color:#4ade80;">${pf(fp.bull.pct)}</div>
+              <div class="dp-proj-hint">tap for reasoning ▾</div>
+            </div>
+            <div class="dp-proj-reasoning">${fp.bull.reasoning}</div>
+          </div>
+        </div>`;
+
+      if (sp) {
+        html += `
+          <div class="dp-spec-box" onclick="this.classList.toggle('expanded')">
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+              <div>
+                <div style="font-size:10px;color:#c084fc;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px;">🚀 Speculative — ${sp.timeframe} horizon</div>
+                <div style="font-size:18px;font-weight:900;color:#c084fc;">${df(sp.price)} <span style="font-size:13px;">${pf(sp.pct)}</span></div>
+              </div>
+              <div style="font-size:10px;color:var(--muted);">Small/mid-cap asymmetric upside · Tap for reasoning</div>
+            </div>
+            <div class="dp-spec-reasoning">${sp.reasoning}</div>
+          </div>`;
+      }
+    }
+
+    // ── Analyst Targets ──
+    const hasTargets = d.target_low || d.target_median || d.target_high;
+    html += `
+      <div style="display:flex;align-items:baseline;gap:10px;margin:18px 0 10px;flex-wrap:wrap;">
+        <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;">🎯 Analyst Targets (1-Year)</h4>
+        <span style="font-size:10px;color:var(--muted);">${d.target_source === 'analyst' ? `${d.analyst_count||'?'} analysts · ${(d.recommendation||'').replace('_',' ').toUpperCase()}` : 'No analyst coverage — heuristic fallback'}</span>
+      </div>
+      <div class="dp-proj-grid">
+        <div class="dp-proj-card" style="color:#f87171;">
+          <div class="dp-proj-card-top">
+            <div class="dp-proj-label" style="color:#f87171;">🐻 Low Target</div>
+            <div class="dp-proj-price" style="color:#f87171;">${df(d.target_low)}</div>
+            ${d.price && d.target_low ? `<div class="dp-proj-pct" style="color:#f87171;">${pf(Math.round((d.target_low/d.price-1)*1000)/10)}</div>` : ''}
+          </div>
+        </div>
+        <div class="dp-proj-card" style="color:#fbbf24;">
+          <div class="dp-proj-card-top">
+            <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Median Target</div>
+            <div class="dp-proj-price" style="color:#fbbf24;">${df(d.target_median)}</div>
+            ${d.price && d.target_median ? `<div class="dp-proj-pct" style="color:#fbbf24;">${pf(Math.round((d.target_median/d.price-1)*1000)/10)}</div>` : ''}
+          </div>
+        </div>
+        <div class="dp-proj-card" style="color:#4ade80;">
+          <div class="dp-proj-card-top">
+            <div class="dp-proj-label" style="color:#4ade80;">🐂 High Target</div>
+            <div class="dp-proj-price" style="color:#4ade80;">${df(d.target_high)}</div>
+            ${d.price && d.target_high ? `<div class="dp-proj-pct" style="color:#4ade80;">${pf(Math.round((d.target_high/d.price-1)*1000)/10)}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+
+    if (d.recommendation_mean != null) {
+      const rm = d.recommendation_mean;
+      const rp = Math.min(100, Math.max(0, ((5 - rm) / 4) * 100));
+      const rl = rm <= 1.5 ? 'Strong Buy' : rm <= 2.5 ? 'Buy' : rm <= 3.5 ? 'Hold' : rm <= 4.5 ? 'Sell' : 'Strong Sell';
+      const rc = rm <= 2 ? 'var(--green)' : rm <= 3 ? 'var(--yellow)' : 'var(--red)';
+      html += `
+        <div class="sq-bar-wrap" style="margin-top:4px;">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:6px;">
+            <span style="color:var(--green);">Strong Buy</span>
+            <span style="font-weight:800;color:${rc};">${rl} (${rm.toFixed(1)})</span>
+            <span style="color:var(--red);">Strong Sell</span>
+          </div>
+          <div class="sq-bar-track">
+            <div class="sq-bar-fill" style="width:100%;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));"></div>
+            <div class="sq-bar-marker" style="left:${rp}%;"></div>
+          </div>
+        </div>`;
+    }
+
+    wrap.innerHTML = html || '<p style="color:var(--muted);font-size:12px;">No projection data available.</p>';
+  } catch(e) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:10px 0;">Could not load projections: ${e.message}</div>`;
+  }
+}
+
+// ── DETAIL PANEL: OPTIMAL PLAY TAB (lazy, per-ticker) ──
+async function mountDPOptimalPlay(wrap) {
+  if (!wrap || wrap.dataset.mounted === '1') return;
+  const ticker = wrap.dataset.playTicker;
+  wrap.dataset.mounted = '1';
+  wrap.innerHTML = `<div style="padding:14px;color:var(--muted);font-size:12px;">Loading optimal play for ${ticker}…</div>`;
+  try {
+    const res = await fetch('/api/info/' + encodeURIComponent(ticker));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    const op = d.optimal_play;
+    if (!op) { wrap.innerHTML = '<p style="color:var(--muted);font-size:12px;">No play data available.</p>'; return; }
+
+    const stanceColors = { buy:'#4ade80', partial:'#fbbf24', accumulate:'var(--accent)', wait:'#f87171' };
+    const stanceLabels = { buy:'✅ Strong Buy Zone', partial:'⚡ Partial Entry', accumulate:'📥 Accumulate', wait:'⏸ Wait / Hold Off' };
+    const sc = stanceColors[op.entry.stance] || 'var(--accent)';
+    const sl = stanceLabels[op.entry.stance] || op.entry.stance;
+    const valBadge = {cheap:'🟢 Cheap',fair:'🟡 Fair Value',stretched:'🔴 Stretched'}[op.entry.val_score] || '';
+    const levelColors = { current:'var(--accent)', add:'#4ade80', full_add:'#22c55e', watch:'#fbbf24', target:'#c084fc', stop:'#f87171' };
+    const levelIcons  = { current:'📍', add:'➕', full_add:'➕➕', watch:'👁', target:'🎯', stop:'🛑' };
+    const sigIcons    = { bullish:'🟢', caution:'🟡', bearish:'🔴', watch:'🔵' };
+    const typeLabels  = { income:'Income', directional:'Directional', neutral:'Neutral', hedge:'Hedge', speculative:'Speculative' };
+
+    let html = `
+      <div class="op-stance ${op.entry.stance}">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <span class="op-badge" style="background:${sc}22;color:${sc};border:1px solid ${sc}55;">${sl}</span>
+          <span style="font-size:11px;font-weight:800;color:${sc};">${op.entry.size} position</span>
+          ${valBadge ? `<span style="font-size:11px;color:var(--muted);">${valBadge}</span>` : ''}
+        </div>
+        <div style="font-size:13px;font-weight:800;color:#e2f0ff;margin-bottom:6px;">${op.entry.action}</div>
+        <div style="font-size:11px;color:#94b4cc;line-height:1.6;">${op.entry.reasoning}</div>
+      </div>
+      <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">📊 Key Price Levels</div>
+      <div class="op-levels">`;
+    for (const lv of op.levels) {
+      const lc = levelColors[lv.type] || 'var(--muted)';
+      const li = levelIcons[lv.type] || '•';
+      html += `<div class="op-level">
+        <div style="text-align:center;min-width:72px;">
+          <div style="font-size:11px;color:var(--muted);">${li}</div>
+          <div class="op-level-price" style="color:${lc};">${lv.price ? '$'+lv.price : '—'}</div>
+        </div>
+        <div class="op-level-body">
+          <div class="op-level-label" style="color:${lc};">${lv.label}</div>
+          <div class="op-level-note">${lv.note}</div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+
+    if (op.signals && op.signals.length) {
+      html += `<div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">📡 Chart Signals</div><div class="op-signals">`;
+      for (const sig of op.signals) {
+        html += `<div class="op-signal ${sig.type}">${sigIcons[sig.type]||'•'} ${sig.text}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (op.options && op.options.length) {
+      html += `
+        <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;">⚙️ Options Plays</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:10px;padding:6px 10px;background:rgba(255,255,255,.03);border-radius:6px;line-height:1.5;">
+          ⚠️ Illustrative structures only — verify IV environment and upcoming catalysts before entering any position.
+        </div>
+        <div class="op-options">`;
+      for (const opt of op.options) {
+        html += `<div class="op-option">
+          <div class="op-option-header">
+            <span class="op-option-name">${opt.strategy}</span>
+            <span class="op-option-struct">${opt.structure}</span>
+            <span class="op-risk-badge op-risk-${opt.risk}">${opt.risk} risk</span>
+            <span class="op-type-badge">${typeLabels[opt.type]||opt.type}</span>
+          </div>
+          <div class="op-option-rationale">${opt.rationale}</div>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    wrap.innerHTML = html;
+  } catch(e) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:10px 0;">Could not load play: ${e.message}</div>`;
+  }
+}
+
 // ── TRADINGVIEW CHARTS ──
 let _tvCounter = 0;
 function mountTvChart(wrap) {
@@ -1556,11 +1803,14 @@ function renderDetailPanel(r) {
         <button class="dp-tab active" data-view="chart" onclick="setDPView(this,'chart')">📈 Indicators</button>
         <button class="dp-tab" data-view="tech" onclick="setDPView(this,'tech')">📊 Technicals</button>
         <button class="dp-tab" data-view="thesis" onclick="setDPView(this,'thesis')">💡 Thesis</button>
+        <button class="dp-tab" data-view="projections" onclick="setDPView(this,'projections')">🎯 Projections</button>
+        <button class="dp-tab" data-view="play" onclick="setDPView(this,'play')">🎮 Optimal Play</button>
       </div>
       <div class="dp-content" data-view="chart"><div class="tv-chart-wrap" data-tv-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="tech" style="display:none;"><div class="tv-tech-wrap" data-tv-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="projections" style="display:none;"><div class="dp-proj-block" data-proj-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="play" style="display:none;"><div class="dp-play-block" data-play-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="thesis" style="display:none;">
-      ${renderProjectionsBlock(r)}
       <div class="thesis-block" data-thesis-ticker="${r.ticker}"></div>
       <div class="detail-grid">
         <div class="detail-block">
@@ -1601,11 +1851,14 @@ function renderRadarDetail(r) {
         <button class="dp-tab active" data-view="chart" onclick="setDPView(this,'chart')">📈 Indicators</button>
         <button class="dp-tab" data-view="tech" onclick="setDPView(this,'tech')">📊 Technicals</button>
         <button class="dp-tab" data-view="thesis" onclick="setDPView(this,'thesis')">💡 Thesis</button>
+        <button class="dp-tab" data-view="projections" onclick="setDPView(this,'projections')">🎯 Projections</button>
+        <button class="dp-tab" data-view="play" onclick="setDPView(this,'play')">🎮 Optimal Play</button>
       </div>
       <div class="dp-content" data-view="chart"><div class="tv-chart-wrap" data-tv-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="tech" style="display:none;"><div class="tv-tech-wrap" data-tv-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="projections" style="display:none;"><div class="dp-proj-block" data-proj-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="play" style="display:none;"><div class="dp-play-block" data-play-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="thesis" style="display:none;">
-      ${renderProjectionsBlock(r)}
       <div class="thesis-block" data-thesis-ticker="${r.ticker}"></div>
       <div class="detail-grid">
         <div class="detail-block">
@@ -1849,11 +2102,14 @@ function renderUpswingDetail(r) {
         <button class="dp-tab active" data-view="chart" onclick="setDPView(this,'chart')">📈 Indicators</button>
         <button class="dp-tab" data-view="tech" onclick="setDPView(this,'tech')">📊 Technicals</button>
         <button class="dp-tab" data-view="thesis" onclick="setDPView(this,'thesis')">💡 Thesis</button>
+        <button class="dp-tab" data-view="projections" onclick="setDPView(this,'projections')">🎯 Projections</button>
+        <button class="dp-tab" data-view="play" onclick="setDPView(this,'play')">🎮 Optimal Play</button>
       </div>
       <div class="dp-content" data-view="chart"><div class="tv-chart-wrap" data-tv-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="tech" style="display:none;"><div class="tv-tech-wrap" data-tv-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="projections" style="display:none;"><div class="dp-proj-block" data-proj-ticker="${r.ticker}"></div></div>
+      <div class="dp-content" data-view="play" style="display:none;"><div class="dp-play-block" data-play-ticker="${r.ticker}"></div></div>
       <div class="dp-content" data-view="thesis" style="display:none;">
-        ${renderProjectionsBlock(r)}
         <div class="detail-block" style="margin-bottom:14px;">
           <h4>🚀 Signal Breakdown — How This Score (${r.upswing_score}) Was Built</h4>
           <div style="margin-top:10px;">${signalRows || '<span style="color:var(--muted);font-size:11px;">No signals detected.</span>'}</div>

@@ -2415,34 +2415,133 @@ async def search_ticker(ticker: str):
 
 @app.get("/api/info/{ticker}")
 async def ticker_info(ticker: str):
-    """On-demand company info for the Thesis tab."""
+    """On-demand company info for the Thesis / Projections / Optimal Play tabs."""
     try:
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(executor, lambda: yf.Ticker(ticker).info)
         if not info:
             return JSONResponse({"error": "No info"}, status_code=404)
-        t_low  = info.get("targetLowPrice")
-        t_med  = info.get("targetMedianPrice") or info.get("targetMeanPrice")
-        t_high = info.get("targetHighPrice")
-        price  = info.get("currentPrice") or info.get("regularMarketPrice")
+
+        def g(k, default=None):
+            v = info.get(k, default)
+            return v if v is not None else default
+
+        t_low   = g("targetLowPrice")
+        t_med   = g("targetMedianPrice") or g("targetMeanPrice")
+        t_high  = g("targetHighPrice")
+        price   = g("currentPrice") or g("regularMarketPrice")
+        prev_close = g("regularMarketPreviousClose") or g("previousClose")
+        day_pct = round((price - prev_close) / prev_close * 100, 2) if price and prev_close else None
+
+        fwd_pe    = g("forwardPE")
+        trail_pe  = g("trailingPE")
+        rev_growth= g("revenueGrowth")
+        gross_mgn = g("grossMargins")
+        op_mgn    = g("operatingMargins")
+        short_pct = g("shortPercentOfFloat")
+        market_cap= g("marketCap", 0)
+        total_rev = g("totalRevenue", 0)
+        ev        = g("enterpriseValue", 0)
+        eps_growth= g("earningsGrowth")
+        peg_ratio = g("pegRatio")
+        total_cash= g("totalCash", 0)
+        total_debt= g("totalDebt", 0)
+        wk52_chg  = g("52WeekChange")
+        wk52_high = g("fiftyTwoWeekHigh")
+        wk52_low  = g("fiftyTwoWeekLow")
+        ma50_v    = round(g("fiftyDayAverage"),      2) if g("fiftyDayAverage")      else None
+        ma200_v   = round(g("twoHundredDayAverage"), 2) if g("twoHundredDayAverage") else None
+
+        rg_pct  = round(rev_growth * 100, 1) if rev_growth  else None
+        gm_pct  = round(gross_mgn  * 100, 1) if gross_mgn   else None
+        om_pct  = round(op_mgn     * 100, 1) if op_mgn      else None
+        sp_pct  = round(short_pct  * 100, 1) if short_pct   else None
+        ev_r    = round(ev / total_rev, 1)    if ev and total_rev else None
+        mc_b    = round(market_cap / 1e9, 2)  if market_cap else None
+        rev_b   = round(total_rev  / 1e9, 3)  if total_rev  else None
+        cash_b  = round(total_cash / 1e9, 3)  if total_cash else None
+        debt_b  = round(total_debt / 1e9, 3)  if total_debt else None
+
+        target_source = "analyst" if (t_low or t_med or t_high) else "model"
+        if price:
+            bear_1y = round(t_low,  2) if t_low  else round(price * 0.70, 2)
+            base_1y = round(t_med,  2) if t_med  else round(price * 1.10, 2)
+            bull_1y = round(t_high, 2) if t_high else round(price * 1.50, 2)
+        else:
+            bear_1y = base_1y = bull_1y = None
+
+        projections = _compute_internal_projections(
+            price          = price,
+            fwd_pe         = round(fwd_pe,   1) if fwd_pe  else None,
+            trailing_pe    = round(trail_pe, 1) if trail_pe else None,
+            revenue_growth = rg_pct,
+            gross_margin   = gm_pct,
+            op_margin      = om_pct,
+            ev_rev         = ev_r,
+            market_cap_b   = mc_b,
+            short_pct      = sp_pct,
+            beta           = g("beta"),
+            eps_growth     = round(eps_growth * 100, 1) if eps_growth else None,
+            peg_ratio      = round(peg_ratio, 2) if peg_ratio and 0 < peg_ratio < 100 else None,
+            total_rev_b    = rev_b,
+            total_cash_b   = cash_b,
+            total_debt_b   = debt_b,
+            wk52_change_pct= round(wk52_chg * 100, 1) if wk52_chg else None,
+        ) if price else None
+
+        optimal_play = _compute_optimal_play(
+            price              = price,
+            ma50               = ma50_v,
+            ma200              = ma200_v,
+            wk52_high          = wk52_high,
+            wk52_low           = wk52_low,
+            wk52_change_pct    = round(wk52_chg * 100, 1) if wk52_chg else None,
+            beta               = g("beta"),
+            fwd_pe             = round(fwd_pe, 1) if fwd_pe else None,
+            trailing_pe        = round(trail_pe, 1) if trail_pe else None,
+            ev_rev             = ev_r,
+            revenue_growth     = rg_pct,
+            op_margin          = om_pct,
+            gross_margin       = gm_pct,
+            short_pct          = sp_pct,
+            market_cap_b       = mc_b,
+            recommendation_mean= g("recommendationMean"),
+            analyst_count      = g("numberOfAnalystOpinions"),
+            bear_1y            = bear_1y,
+            base_1y            = base_1y,
+            day_pct            = day_pct,
+            target_source      = target_source,
+        ) if price else None
+
         return JSONResponse({
-            "ticker": ticker,
-            "name": info.get("longName", ticker),
-            "summary": info.get("longBusinessSummary", ""),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "website": info.get("website"),
-            "employees": info.get("fullTimeEmployees"),
-            "city": info.get("city"),
-            "state": info.get("state"),
-            "country": info.get("country"),
-            "price": round(price, 2) if price else None,
+            "ticker":        ticker,
+            "name":          g("longName", ticker),
+            "summary":       g("longBusinessSummary", ""),
+            "sector":        g("sector"),
+            "industry":      g("industry"),
+            "website":       g("website"),
+            "employees":     g("fullTimeEmployees"),
+            "city":          g("city"),
+            "state":         g("state"),
+            "country":       g("country"),
+            "price":         round(price, 2) if price else None,
+            "day_pct":       day_pct,
+            "ma50":          ma50_v,
+            "ma200":         ma200_v,
             "target_low":    round(t_low, 2)  if t_low  else None,
             "target_median": round(t_med, 2)  if t_med  else None,
             "target_high":   round(t_high, 2) if t_high else None,
-            "target_source": "analyst" if (t_low or t_med or t_high) else "model",
-            "analyst_count": info.get("numberOfAnalystOpinions"),
-            "recommendation": info.get("recommendationKey"),
+            "target_source": target_source,
+            "analyst_count": g("numberOfAnalystOpinions"),
+            "recommendation":g("recommendationKey"),
+            "recommendation_mean": g("recommendationMean"),
+            "fwd_pe":        round(fwd_pe, 1) if fwd_pe else None,
+            "revenue_growth":rg_pct,
+            "op_margin":     om_pct,
+            "short_pct":     sp_pct,
+            "beta":          g("beta"),
+            "projections":   projections,
+            "optimal_play":  optimal_play,
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
