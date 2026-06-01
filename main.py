@@ -2003,17 +2003,25 @@ def _compute_optimal_play(
 def _compute_internal_projections(
     price, fwd_pe, trailing_pe, revenue_growth, gross_margin, op_margin,
     ev_rev, market_cap_b, short_pct, beta, eps_growth, peg_ratio,
-    total_rev_b, total_cash_b, total_debt_b, wk52_change_pct
+    total_rev_b, total_cash_b, total_debt_b, wk52_change_pct,
+    sector=None, industry=None,
 ):
     """
-    Build fundamental + speculative 1-year price projections with written reasoning.
+    Build bear / base / bull / speculative price projections with written reasoning.
 
-    Key design principles:
-    - Revenue growth % does NOT directly map to stock price growth.
-    - Prices are derived from per-share value (EV → market cap → ÷ diluted shares).
-    - Share dilution is explicitly modelled for pre-profit companies.
-    - All outputs are capped to realistic single-year and 3-year ranges.
-    - Micro-cap 'revenue_heuristic' uses conservative fixed bands, not rg multiples.
+    Design principles:
+    - Speculation is BAKED INTO each scenario, not separated out.
+    - Bear = fundamentals disappoint AND no catalysts materialize.
+    - Base = on-plan fundamentals + probability-weighted catalyst(s) (e.g. one
+      gov contract win, an acquisition synergy materializing on schedule).
+    - Bull = strong fundamental execution + multiple catalysts fire (major
+      contract, acquisition synergy, institutional discovery, re-rating).
+    - Bull case is always ABOVE current price for any company with genuine
+      growth optionality. Only structurally impaired companies have bull < current.
+    - Revenue growth does NOT directly map to stock price growth.
+    - Per-share math: EV → market cap ÷ diluted shares. Dilution explicit.
+    - Sector/industry used to detect catalyst profile (gov/defense, SaaS,
+      biotech, deep-tech hardware) and adjust multiples accordingly.
     """
     if not price or price <= 0:
         return None
@@ -2027,6 +2035,8 @@ def _compute_internal_projections(
     rev  = total_rev_b  or 0   # $B
     cash = total_cash_b or 0   # $B
     debt = total_debt_b or 0   # $B
+    sec  = (sector   or "").lower()
+    ind  = (industry or "").lower()
 
     is_profitable  = om is not None and om > 0
     has_rev_growth = rg is not None
@@ -2035,6 +2045,48 @@ def _compute_internal_projections(
 
     # Implied share count (millions) from market cap and price
     shares_m = (mc * 1000 / price) if mc > 0 and price > 0 else None
+
+    # ── Catalyst profile ─────────────────────────────────────────────────────
+    # Score 0–4. Higher = more speculative upside baked into base/bull,
+    # bigger contract/synergy optionality, more aggressive bull multiple.
+    catalyst_score = 0
+
+    # Sector signals
+    gov_defense   = any(x in sec+ind for x in ["defense","aerospace","government","military","rail","drone","autonomous"])
+    saas_software = any(x in sec+ind for x in ["software","saas","cloud","cybersecurity","information technology"])
+    deep_tech     = any(x in sec+ind for x in ["semiconductor","hardware","robotics","artificial intelligence","sensor"])
+    biotech       = any(x in sec+ind for x in ["biotech","pharmaceutical","drug","biopharma","clinical"])
+
+    if gov_defense:   catalyst_score += 2   # gov/defense contracts are binary, high-upside
+    if saas_software: catalyst_score += 1
+    if deep_tech:     catalyst_score += 1
+    if biotech:       catalyst_score += 1
+
+    # Size / growth signals
+    is_micro_small = mc > 0 and mc < 2.0   # under $2B
+    if is_micro_small:    catalyst_score += 1
+    if rg and rg >= 30:   catalyst_score += 1
+    if rg and rg >= 80:   catalyst_score += 1   # hypergrowth (acquisitions, new market)
+    if ev_r and ev_r < 3: catalyst_score += 1   # deeply undervalued on revenue
+
+    catalyst_score = min(catalyst_score, 5)   # cap at 5
+
+    # Catalyst narrative fragments used in reasoning strings
+    if gov_defense:
+        cat_base_text = "a government/defense contract win or program expansion"
+        cat_bull_text = "multiple contract wins, program scaling, and M&A synergy realization"
+    elif biotech:
+        cat_base_text = "positive trial readout or partnership deal"
+        cat_bull_text = "major data catalyst, partnership, or FDA milestone"
+    elif saas_software:
+        cat_base_text = "new enterprise contract(s) and net revenue retention holding"
+        cat_bull_text = "land-and-expand acceleration, new product upsell, or M&A"
+    elif deep_tech:
+        cat_base_text = "design win or customer qualification announcement"
+        cat_bull_text = "volume production ramp, additional OEM wins, or strategic investment"
+    else:
+        cat_base_text = "at least one positive catalyst materializing"
+        cat_bull_text = "strong execution across all growth vectors"
 
     # ── choose methodology ──
     has_valid_pe = has_pe and pe > 3
@@ -2058,35 +2110,46 @@ def _compute_internal_projections(
 
     # ─────────────────────────────────────────────────────────────────────────
     # METHOD 1: Forward P/E Beat/Miss (profitable companies with analyst EPS)
+    # Speculation baked in: base includes one expected catalyst, bull includes
+    # multiple catalysts + margin expansion. Bear = pure miss, no tailwinds.
     # ─────────────────────────────────────────────────────────────────────────
     if method == "pe_beat_miss":
         implied_eps = price / pe
 
-        # Tiered PE floor/ceiling based on current multiple
+        # Tiered PE de-rate floor and re-rate ceiling, scaled by catalyst score
+        cat_pe_boost = catalyst_score * 0.04   # up to +20% on ceiling
         if pe < 15:
             pe_floor = max(8,  round(pe * 0.65, 1))
-            pe_ceil  = round(pe * 1.20, 1)
-            bear_floor_pct, bull_ceil_pct = 0.80, 1.30
+            pe_ceil  = round(pe * (1.25 + cat_pe_boost), 1)
+            bear_floor_pct = 0.80
         elif pe < 25:
             pe_floor = max(12, round(pe * 0.60, 1))
-            pe_ceil  = round(pe * 1.25, 1)
-            bear_floor_pct, bull_ceil_pct = 0.72, 1.45
+            pe_ceil  = round(pe * (1.28 + cat_pe_boost), 1)
+            bear_floor_pct = 0.70
         elif pe < 40:
             pe_floor = max(15, round(pe * 0.55, 1))
-            pe_ceil  = round(pe * 1.30, 1)
-            bear_floor_pct, bull_ceil_pct = 0.65, 1.60
+            pe_ceil  = round(pe * (1.32 + cat_pe_boost), 1)
+            bear_floor_pct = 0.62
         else:
             pe_floor = max(20, round(pe * 0.50, 1))
-            pe_ceil  = round(pe * 1.30, 1)
-            bear_floor_pct, bull_ceil_pct = 0.58, 1.70
+            pe_ceil  = round(pe * (1.35 + cat_pe_boost), 1)
+            bear_floor_pct = 0.55
 
-        bear_eps = implied_eps * 0.72   # 28% EPS miss
-        base_eps = implied_eps * 1.06   # 6% beat
-        bull_eps = implied_eps * 1.20   # 20% beat
+        # EPS scenarios — base gets a small catalyst premium for high-catalyst companies
+        bear_eps = implied_eps * 0.72
+        base_eps = implied_eps * (1.06 + catalyst_score * 0.01)   # up to +11% beat for high-catalyst
+        bull_eps = implied_eps * (1.20 + catalyst_score * 0.03)   # up to +35% for highest catalyst
 
         bear_p = clamp(round(bear_eps * pe_floor, 2), price * bear_floor_pct, price * 0.95)
-        base_p = clamp(round(base_eps * pe,       2), price * 0.98,           price * bull_ceil_pct)
-        bull_p = clamp(round(bull_eps * pe_ceil,  2), price * 1.12,           price * bull_ceil_pct)
+        base_p = round(base_eps * pe, 2)
+        bull_p = round(bull_eps * pe_ceil, 2)
+
+        # Bull MUST be above current price for any company with growth optionality
+        bull_floor = price * (1.15 + catalyst_score * 0.05)   # +15–40% floor depending on catalyst
+        bull_p = max(bull_p, round(bull_floor, 2))
+        # Base should be meaningfully positive for catalyst-rich companies
+        base_floor = price * (1.02 + catalyst_score * 0.02)
+        base_p = max(base_p, round(base_floor, 2))
 
         rg_str = f"{rg:.0f}% YoY" if rg is not None else "N/A"
         om_str = f"{om:.1f}%" if om is not None else "N/A"
@@ -2094,233 +2157,264 @@ def _compute_internal_projections(
         r40_note = (f"Rule of 40 = {r40:.0f} ({'strong' if r40>=40 else 'improving' if r40>=25 else 'below target'}).")
         peg_note = (f" PEG {peg_ratio:.2f}× ({'attractive' if peg_ratio < 1 else 'fair' if peg_ratio < 2 else 'stretched'})."
                     if peg_ratio and peg_ratio > 0 else "")
+        cat_note = (f" Catalyst profile: {catalyst_score}/5 (gov/defense contract optionality, acquisition synergies)."
+                    if catalyst_score >= 3 else "")
 
         methodology_note = (
-            f"Methodology: Earnings beat/miss vs consensus (Forward P/E). "
+            f"Methodology: Earnings beat/miss vs consensus (Forward P/E) with catalyst overlay. "
             f"Fwd P/E: {pe:.0f}×, implied EPS: {fmt_p(implied_eps)}. "
-            f"Revenue growth: {rg_str}, operating margin: {om_str}. {r40_note}{peg_note}"
+            f"Revenue growth: {rg_str}, operating margin: {om_str}. {r40_note}{peg_note}{cat_note}"
         )
         bear_reason = (
-            f"EPS misses consensus by ~28% ({fmt_p(implied_eps)} → {fmt_p(bear_eps)}), driven by "
-            f"revenue deceleration{(f' to ~{rg*0.4:.0f}%') if rg else ''} or margin compression. "
-            f"Multiple de-rates from {pe:.0f}× to {pe_floor:.0f}×. "
+            f"EPS misses consensus by ~28% ({fmt_p(implied_eps)} → {fmt_p(bear_eps)}) — "
+            f"revenue deceleration{(f' to ~{rg*0.4:.0f}%') if rg else ''}, margin compression, "
+            f"and no catalysts materialize. P/E de-rates {pe:.0f}× → {pe_floor:.0f}×. "
             + ("High short interest amplifies selling." if short_pct and short_pct >= 15
                else "Operating leverage cuts both ways when revenue disappoints.")
         )
         bear_assumptions = [
             f"Implied consensus EPS: {fmt_p(implied_eps)}",
-            f"Bear EPS (–28% miss): {fmt_p(bear_eps)}",
+            f"Bear EPS (–28% miss): {fmt_p(bear_eps)} — guidance cut, no catalyst",
             f"P/E de-rates: {pe:.0f}× → {pe_floor:.0f}× ({round((1-pe_floor/pe)*100):.0f}% compression)",
-            *([ f"Revenue growth decelerates to ~{rg*0.4:.0f}%"] if rg else []),
+            *([ f"Revenue decelerates to ~{rg*0.4:.0f}%"] if rg else []),
+            f"No acquisition synergies / contract wins assumed — pure miss scenario",
             f"Bear price = {fmt_p(bear_eps)} × {pe_floor:.0f}× = {fmt_p(bear_p)}",
             *([ f"Short interest {short_pct:.0f}% of float — amplifies downside"] if short_pct and short_pct >= 15 else []),
         ]
         base_reason = (
-            f"EPS beats consensus by ~6% ({fmt_p(base_eps)} vs {fmt_p(implied_eps)}). "
-            f"P/E holds at {pe:.0f}× — market continues to pay a growth premium. "
-            + (f"Operating margin of {om:.1f}% provides cushion for earnings leverage."
-               if is_profitable else "Revenue on track; profitability runway intact.")
+            f"EPS beats consensus by ~{round((base_eps/implied_eps-1)*100):.0f}% ({fmt_p(base_eps)}). "
+            f"P/E holds at {pe:.0f}×. "
+            + (f"Base case assumes {cat_base_text} materializes alongside solid execution. " if catalyst_score >= 2 else "")
+            + (f"Operating margin {om:.1f}% provides earnings leverage cushion."
+               if is_profitable else "Revenue execution on track; profitability runway intact.")
         )
         base_assumptions = [
             f"Implied consensus EPS: {fmt_p(implied_eps)}",
-            f"Base EPS (+6% beat): {fmt_p(base_eps)}",
-            f"P/E stable at {pe:.0f}× (no re-rating assumed)",
+            f"Base EPS (+{round((base_eps/implied_eps-1)*100):.0f}% beat): {fmt_p(base_eps)}",
+            f"P/E stable at {pe:.0f}× — no multiple re-rating assumed",
             *([ f"Revenue growth ~{rg:.0f}% continues"] if rg else []),
+            *([ f"Catalyst baked in: {cat_base_text}"] if catalyst_score >= 2 else []),
             f"Base price = {fmt_p(base_eps)} × {pe:.0f}× = {fmt_p(base_p)}",
-            *([ f"Operating margin: {om:.1f}%"] if is_profitable else []),
         ]
         bull_reason = (
-            f"EPS beats by ~20% ({fmt_p(bull_eps)} vs {fmt_p(implied_eps)}), driven by "
-            f"{(f'accelerating revenue (~{rg*1.25:.0f}%), ' ) if rg else ''}margin expansion or raised guidance. "
-            f"P/E expands to {pe_ceil:.0f}× as the earnings thesis is validated. "
-            + (f"At {om:.1f}% operating margin, incremental revenue drives outsized EPS leverage."
-               if is_profitable else "Profitability inflection triggers a re-rating to an earnings multiple.")
+            f"EPS beats by ~{round((bull_eps/implied_eps-1)*100):.0f}% ({fmt_p(bull_eps)}), driven by "
+            f"{(f'accelerating revenue (~{rg*1.3:.0f}%), ') if rg else ''}margin expansion, "
+            f"and {cat_bull_text}. "
+            f"P/E expands to {pe_ceil:.0f}× as the full earnings + catalyst thesis is validated by institutions. "
+            + (f"At {om:.1f}% operating margin, additional revenue generates outsized EPS leverage."
+               if is_profitable else "Profitability inflection triggers a re-rating from growth to earnings multiple.")
         )
         bull_assumptions = [
-            f"Implied consensus EPS: {fmt_p(implied_eps)}",
-            f"Bull EPS (+20% beat): {fmt_p(bull_eps)}",
+            f"Bull EPS (+{round((bull_eps/implied_eps-1)*100):.0f}% beat): {fmt_p(bull_eps)}",
             f"P/E expands: {pe:.0f}× → {pe_ceil:.0f}× ({round((pe_ceil/pe-1)*100):.0f}% expansion)",
-            *([ f"Revenue growth accelerates to ~{rg*1.25:.0f}%"] if rg else []),
-            f"Bull price = {fmt_p(bull_eps)} × {pe_ceil:.0f}× = {fmt_p(bull_p)}",
+            *([ f"Revenue accelerates to ~{rg*1.30:.0f}%"] if rg else []),
+            f"Catalyst(s): {cat_bull_text}",
             *([ f"Rule of 40 = {r40:.0f}"] if rg or om else []),
+            f"Bull price = {fmt_p(bull_eps)} × {pe_ceil:.0f}× = {fmt_p(bull_p)}",
         ]
 
     # ─────────────────────────────────────────────────────────────────────────
     # METHOD 2: EV/Revenue model (pre-profit, has revenue data)
-    # Uses per-share math: project forward EV → market cap → ÷ diluted shares
-    # Revenue growth is an INPUT to the valuation, not a direct price multiplier
+    # Per-share math: EV → market cap ÷ diluted shares.
+    # Speculation baked in: base includes partial catalyst probability,
+    # bull includes full catalyst stack + synergy/contract win premium.
     # ─────────────────────────────────────────────────────────────────────────
     elif method == "ev_revenue":
-        # Cap revenue growth used in forward projections at 120%
         rg_calc = min(rg, 120.0)
         rg_d    = rg_calc / 100.0
 
-        # Sector-aware EV/Rev multiple bands (using current as anchor)
-        # Bear: revenue misses + multiple contracts; Bull: beat + modest re-rate
-        # Multiple caps prevent unrealistic targets
-        ev_r_cap   = min(ev_r, 40.0)   # no model above 40× EV/Rev
-        bear_mult  = clamp(ev_r_cap * 0.55, 0.5, 20.0)
-        base_mult  = clamp(ev_r_cap * 0.95, 0.5, 35.0)  # slight compression baked in
-        bull_mult  = clamp(ev_r_cap * 1.20, 0.5, 40.0)  # max +20% re-rate in one year
+        # EV/Revenue multiple scenarios — catalyst score widens the bull band
+        ev_r_cap  = min(ev_r, 40.0)
+        # Bear: miss + de-rate; Base: on plan + partial catalyst premium;
+        # Bull: beat + full catalyst + sector re-rate
+        bear_mult = clamp(ev_r_cap * 0.50, 0.3, 15.0)
+        base_mult = clamp(ev_r_cap * (0.95 + catalyst_score * 0.04), 0.5, 30.0)
+        bull_mult = clamp(ev_r_cap * (1.20 + catalyst_score * 0.12), 0.5, 50.0)
+        # Gov/defense companies can deserve higher multiples on contract win
+        if gov_defense and catalyst_score >= 3:
+            bull_mult = clamp(bull_mult * 1.25, bull_mult, 50.0)
 
-        # Forward revenue scenarios
-        bear_rev = rev * (1 + rg_d * 0.30)   # revenue misses badly
-        base_rev = rev * (1 + rg_d * 0.85)   # revenue roughly on plan
-        bull_rev = rev * (1 + rg_d * 1.15)   # revenue beats
+        # Revenue scenarios
+        bear_rev = rev * (1 + rg_d * 0.25)    # revenue misses badly
+        base_rev = rev * (1 + rg_d * 0.90)    # on plan, includes some acquisition/contract contribution
+        bull_rev = rev * (1 + rg_d * 1.20)    # beats + acquisition synergies materialize
 
-        # EV per scenario
         bear_ev = bear_rev * bear_mult
         base_ev = base_rev * base_mult
         bull_ev  = bull_rev * bull_mult
 
         # Market cap = EV − debt + cash
-        bear_mc = bear_ev - debt + cash
-        base_mc = base_ev - debt + cash
-        bull_mc  = bull_ev  - debt + cash
+        bear_mc = max(bear_ev - debt + cash, 0.001)
+        base_mc = max(base_ev - debt + cash, 0.001)
+        bull_mc  = max(bull_ev  - debt + cash, 0.001)
 
-        # Pre-profit companies dilute ~10–18% per year via stock-based comp / raises
-        dilution_bear = 1.15   # bear: more dilution (equity raise likely)
-        dilution_base = 1.10
-        dilution_bull = 1.08   # bull: less dilution (executes, less need to raise)
+        # Dilution: bear more dilutive (equity raise), bull less (executes well)
+        dilution_bear = 1.15
+        dilution_base = 1.08 if catalyst_score >= 3 else 1.10   # less dilution if catalysts fire
+        dilution_bull = 1.06 if catalyst_score >= 3 else 1.08
 
         if shares_m and shares_m > 0:
-            bear_p = clamp(round((bear_mc * 1e9) / (shares_m * 1e6 * dilution_bear), 2),
-                           price * 0.40, price * 0.90)
-            base_p = clamp(round((base_mc * 1e9) / (shares_m * 1e6 * dilution_base), 2),
-                           price * 0.85, price * 1.50)
-            bull_p = clamp(round((bull_mc  * 1e9) / (shares_m * 1e6 * dilution_bull),  2),
-                           price * 1.10, price * 2.20)
+            raw_bear = round((bear_mc * 1e9) / (shares_m * 1e6 * dilution_bear), 2)
+            raw_base = round((base_mc * 1e9) / (shares_m * 1e6 * dilution_base), 2)
+            raw_bull  = round((bull_mc  * 1e9) / (shares_m * 1e6 * dilution_bull),  2)
         else:
-            # Fallback: fixed pct bands
-            bear_p = round(price * 0.65, 2)
-            base_p = round(price * 1.05, 2)
-            bull_p = round(price * 1.45, 2)
+            raw_bear = price * 0.62
+            raw_base = price * 1.10
+            raw_bull  = price * 1.60
+
+        bear_p = clamp(raw_bear, price * 0.38, price * 0.90)
+        # Base: should be above current for high-catalyst companies with real revenue growth
+        base_floor = price * (1.05 + catalyst_score * 0.04)   # +5–25% floor
+        base_p = max(clamp(raw_base, price * 0.85, price * 2.50), round(base_floor, 2))
+        # Bull: always above current for companies with genuine growth/catalyst optionality
+        bull_floor = price * (1.20 + catalyst_score * 0.10)   # +20–70% floor
+        bull_p = max(clamp(raw_bull, price * 1.10, price * 4.00), round(bull_floor, 2))
 
         r40 = rg + (om or 0)
-        gm_note = (f" Gross margin {gm:.0f}% — clear path to scale profitability." if gm and gm >= 60
-                   else f" Gross margin {gm:.0f}% needs improvement." if gm else "")
+        gm_note = (f" Gross margin {gm:.0f}% — clear path to operating leverage." if gm and gm >= 60
+                   else f" Gross margin {gm:.0f}% — needs improvement for profitability." if gm else "")
+        cat_label = ("High" if catalyst_score >= 4 else "Moderate" if catalyst_score >= 2 else "Low")
         methodology_note = (
-            f"Methodology: EV/Revenue model (pre-profit growth company). "
-            f"Current EV/Rev: {ev_r:.1f}×, revenue: ${rev:.2f}B, revenue growth: {rg:.0f}% YoY. "
-            f"Rule of 40 = {r40:.0f}. Share dilution of 8–15% per year modelled explicitly.{gm_note}"
+            f"Methodology: EV/Revenue model (pre-profit) with catalyst overlay. "
+            f"Current EV/Rev: {ev_r:.1f}×, revenue: ${rev:.3f}B, growth: {rg:.0f}% YoY. "
+            f"Rule of 40 = {r40:.0f}. Catalyst profile: {cat_label} ({catalyst_score}/5). "
+            f"Share dilution modelled explicitly (8–15%/yr).{gm_note}"
         )
         bear_reason = (
-            f"Revenue growth slows to ~{rg*0.30:.0f}% (execution miss). "
-            f"EV/Revenue contracts from {ev_r:.1f}× to {bear_mult:.1f}× as the market loses "
-            f"patience with the profitability timeline. ~15% share dilution from an equity raise "
-            f"further erodes per-share value. "
-            + ("High short interest amplifies selling on a miss." if short_pct and short_pct >= 12
-               else "Cash burn forces a dilutive raise, capping recovery.")
+            f"Revenue growth stalls at ~{rg*0.25:.0f}% — execution miss, no catalysts materialize. "
+            f"EV/Revenue contracts from {ev_r:.1f}× to {bear_mult:.1f}× as the market loses patience with the profitability timeline. "
+            f"~15% share dilution from a forced equity raise further erodes per-share value. "
+            + ("High short interest amplifies selling." if short_pct and short_pct >= 12
+               else "Cash burn forces a dilutive raise at an unfavorable price.")
         )
         bear_assumptions = [
-            f"Revenue growth decelerates to ~{rg*0.30:.0f}% (miss scenario)",
+            f"Revenue growth slows to ~{rg*0.25:.0f}% (miss — no contract wins, no synergies)",
             f"Forward revenue: ${bear_rev:.3f}B",
-            f"EV/Revenue contracts: {ev_r:.1f}× → {bear_mult:.1f}× (–{round((1-bear_mult/ev_r)*100):.0f}%)",
+            f"EV/Revenue de-rates: {ev_r:.1f}× → {bear_mult:.1f}× (–{round((1-bear_mult/ev_r)*100):.0f}%)",
             f"Implied EV: ${bear_ev:.2f}B → market cap: ${bear_mc:.2f}B",
-            f"Share dilution: ~15% (equity raise assumed)",
+            f"Share dilution: ~15% (equity raise at depressed price assumed)",
             f"Bear price ≈ {fmt_p(bear_p)}",
-            *([ f"Short interest: {short_pct:.0f}% — amplifies downside"] if short_pct and short_pct >= 12 else []),
+            *([ f"Short interest: {short_pct:.0f}% of float — amplifies downside"] if short_pct and short_pct >= 12 else []),
         ]
         base_reason = (
-            f"Revenue roughly on plan at ~{rg*0.85:.0f}% growth. "
-            f"EV/Revenue compresses slightly to {base_mult:.1f}× (market anchors to growth rate). "
-            f"~10% dilution from stock-based compensation reduces per-share gains relative to market cap growth. "
-            + (f"Gross margin of {gm:.0f}% keeps the profitability thesis alive." if gm and gm >= 55
-               else "Execution on the current roadmap keeps the multiple supported.")
+            f"Revenue on plan at ~{rg*0.90:.0f}% growth. "
+            + (f"Base case includes {cat_base_text} — one catalyst materializing is a realistic expectation given the company's positioning. " if catalyst_score >= 2 else "")
+            + f"EV/Revenue moves to {base_mult:.1f}× as growth is confirmed. "
+            f"~{round((dilution_base-1)*100):.0f}% dilution from stock-based comp. "
+            + (f"Gross margin of {gm:.0f}% provides a visible path to profitability." if gm and gm >= 55
+               else "Execution on current roadmap keeps the multiple supported.")
         )
         base_assumptions = [
-            f"Revenue growth ~{rg*0.85:.0f}% (slightly moderated)",
+            f"Revenue growth ~{rg*0.90:.0f}% (on plan)",
             f"Forward revenue: ${base_rev:.3f}B",
-            f"EV/Revenue: {ev_r:.1f}× → {base_mult:.1f}× (slight compression)",
+            f"EV/Revenue: {ev_r:.1f}× → {base_mult:.1f}×",
             f"Implied EV: ${base_ev:.2f}B → market cap: ${base_mc:.2f}B",
-            f"Share dilution: ~10% (stock-based comp)",
+            *([ f"Catalyst probability-weighted: {cat_base_text}"] if catalyst_score >= 2 else []),
+            f"Share dilution: ~{round((dilution_base-1)*100):.0f}% (stock-based comp)",
             f"Base price ≈ {fmt_p(base_p)}",
         ]
         bull_reason = (
-            f"Revenue beats at ~{rg*1.15:.0f}% growth via new contract wins or market expansion. "
-            f"EV/Revenue re-rates modestly to {bull_mult:.1f}× as near-term profitability becomes visible. "
-            f"Disciplined capital allocation limits dilution to ~8%. "
-            + (f"Gross margins of {gm:.0f}% at scale suggest high-quality future earnings."
-               if gm and gm >= 60 else "A major partnership or contract win brings institutional coverage.")
+            f"Revenue beats at ~{rg*1.20:.0f}% through {cat_bull_text}. "
+            f"EV/Revenue re-rates to {bull_mult:.1f}× as the full catalyst stack materializes "
+            f"and institutional coverage initiates. "
+            f"Disciplined capital allocation limits dilution to ~{round((dilution_bull-1)*100):.0f}%. "
+            + (f"Gross margins of {gm:.0f}% at scale underpin high-quality future earnings." if gm and gm >= 60
+               else f"The combination of revenue beats and {cat_base_text} is the re-rating catalyst.")
         )
         bull_assumptions = [
-            f"Revenue beats at ~{rg*1.15:.0f}% growth (new wins / expansion)",
+            f"Revenue beats at ~{rg*1.20:.0f}% (contract wins + acquisition synergies)",
             f"Forward revenue: ${bull_rev:.3f}B",
             f"EV/Revenue re-rates: {ev_r:.1f}× → {bull_mult:.1f}× (+{round((bull_mult/ev_r-1)*100):.0f}%)",
             f"Implied EV: ${bull_ev:.2f}B → market cap: ${bull_mc:.2f}B",
-            f"Share dilution: ~8% (disciplined, no equity raise needed)",
+            f"Catalysts: {cat_bull_text}",
+            f"Share dilution: ~{round((dilution_bull-1)*100):.0f}% (limited — no equity raise needed)",
             f"Bull price ≈ {fmt_p(bull_p)}",
-            f"Catalyst: contract win, major partnership, or profitability milestone",
         ]
 
     # ─────────────────────────────────────────────────────────────────────────
-    # METHOD 3: Revenue heuristic (no EV/Rev, just growth signal)
-    # Uses fixed realistic bands rather than scaling with rg
+    # METHOD 3: Revenue heuristic (no EV/Rev data)
+    # Fixed-band approach tiered by growth regime + catalyst score
+    # Bull always above current for growth companies
     # ─────────────────────────────────────────────────────────────────────────
     elif method == "revenue_heuristic":
-        # Classify growth regime and apply realistic bands
+        cat_add = catalyst_score * 0.04   # up to +20% on base/bull from catalyst profile
+
         if rg >= 100:
-            # Hyper-growth micro-cap: wide band but capped by realism
-            bear_pct, base_pct, bull_pct = -0.40, +0.10, +0.55
+            bear_pct = -0.42
+            base_pct = 0.12 + cat_add
+            bull_pct = 0.55 + cat_add * 2
             growth_label = "hyper-growth"
         elif rg >= 50:
-            bear_pct, base_pct, bull_pct = -0.35, +0.12, +0.45
+            bear_pct = -0.35
+            base_pct = 0.14 + cat_add
+            bull_pct = 0.48 + cat_add * 2
             growth_label = "high-growth"
         elif rg >= 25:
-            bear_pct, base_pct, bull_pct = -0.30, +0.12, +0.38
+            bear_pct = -0.28
+            base_pct = 0.12 + cat_add
+            bull_pct = 0.38 + cat_add * 1.5
             growth_label = "strong-growth"
         elif rg >= 10:
-            bear_pct, base_pct, bull_pct = -0.25, +0.10, +0.28
+            bear_pct = -0.22
+            base_pct = 0.10 + cat_add
+            bull_pct = 0.28 + cat_add
             growth_label = "moderate-growth"
         else:
-            bear_pct, base_pct, bull_pct = -0.20, +0.07, +0.20
+            bear_pct = -0.18
+            base_pct = 0.05
+            bull_pct = 0.18
             growth_label = "slow-growth"
 
         bear_p = round(price * (1 + bear_pct), 2)
         base_p = round(price * (1 + base_pct), 2)
         bull_p = round(price * (1 + bull_pct), 2)
 
-        dil_note = " Share dilution of 10–20% per year typical for pre-profit companies at this stage." if not is_profitable else ""
+        # Enforce bull above current price for any meaningful growth company
+        if rg and rg >= 10 and catalyst_score >= 1:
+            bull_p = max(bull_p, round(price * (1.15 + catalyst_score * 0.05), 2))
+
+        dil_note = " ~10–20%/yr dilution typical for pre-profit stage." if not is_profitable else ""
+        cat_label = ("High" if catalyst_score >= 4 else "Moderate" if catalyst_score >= 2 else "Standard")
         methodology_note = (
-            f"Methodology: Growth-regime heuristic (no P/E or EV/Revenue data available). "
-            f"Revenue growth: {rg:.0f}% YoY — classified as {growth_label}. "
-            f"Price bands reflect realistic equity return distributions for this growth tier.{dil_note}"
+            f"Methodology: Growth-regime heuristic with catalyst overlay (no P/E or EV/Revenue available). "
+            f"Revenue growth: {rg:.0f}% YoY ({growth_label}). Catalyst profile: {cat_label} ({catalyst_score}/5).{dil_note}"
         )
         bear_reason = (
-            f"Revenue growth decelerates sharply or guidance disappoints. "
-            f"Without a clear profitability timeline, the market re-prices the stock to a "
-            f"lower speculative premium. "
-            + ("Equity raise risk adds further dilution headwind." if not is_profitable else "Margin pressure limits earnings leverage.")
+            f"Revenue disappoints and no catalysts materialize. "
+            f"Without a clear profitability timeline, the market de-rates the speculative premium. "
+            + ("Forced equity raise adds dilution headwind." if not is_profitable else "Margin pressure limits earnings leverage.")
         )
         base_reason = (
-            f"Revenue continues at or near the current {rg:.0f}% trajectory. "
-            f"Valuation drifts modestly upward as growth is confirmed, though the absence of "
-            f"a clear earnings multiple limits multiple expansion."
+            f"Revenue holds at ~{rg:.0f}% and {cat_base_text} materializes. "
+            + (f"Base case assumes ~{catalyst_score} catalyst(s) partially realized — realistic given sector positioning. "
+               if catalyst_score >= 2 else "")
+            + "Valuation drifts upward as growth is confirmed."
         )
         bull_reason = (
-            f"Revenue reaccelerates or a major catalyst (contract win, partnership, coverage initiation) "
-            f"brings new institutional interest. Limited historical data means the upside is real but "
-            f"requires execution proof points to sustain."
+            f"Revenue accelerates or {cat_bull_text} fires. "
+            f"Institutional discovery + momentum re-rating amplifies the move. "
+            + ("Dilution risk is manageable if catalysts materialize early." if not is_profitable else "")
         )
         bear_assumptions = [
-            f"Revenue growth regime: {growth_label} ({rg:.0f}% current YoY)",
-            f"Bear band: {bear_pct*100:.0f}% — growth disappointment + risk-off de-rating",
+            f"Revenue regime: {growth_label} ({rg:.0f}% YoY)",
+            f"Bear: {bear_pct*100:.0f}% — miss + no catalysts + risk-off de-rating",
             f"Bear price = {fmt_p(price)} × {1+bear_pct:.2f} = {fmt_p(bear_p)}",
-            "No P/E or EV/Revenue anchor — band based on comparable growth-tier distributions",
-            *(["~15-20% dilution possible via equity raise"] if not is_profitable else []),
+            "No P/E or EV/Revenue anchor — band based on comparable growth-tier comps",
+            *(["~15–20% dilution from equity raise possible"] if not is_profitable else []),
         ]
         base_assumptions = [
-            f"Revenue growth holds at ~{rg:.0f}%",
-            f"Base band: +{base_pct*100:.0f}% — growth confirmed, stable multiple",
+            f"Revenue growth holds ~{rg:.0f}%",
+            f"Catalyst baked in: {cat_base_text}" if catalyst_score >= 2 else "No major catalyst assumed",
+            f"Base: +{base_pct*100:.0f}% — growth confirmed + partial catalyst realization",
             f"Base price = {fmt_p(price)} × {1+base_pct:.2f} = {fmt_p(base_p)}",
-            *(["~10% dilution from stock-based comp assumed"] if not is_profitable else []),
+            *(["~10% dilution from stock-based comp"] if not is_profitable else []),
         ]
         bull_assumptions = [
-            f"Revenue growth holds or accelerates above {rg:.0f}%",
-            f"Bull band: +{bull_pct*100:.0f}% — catalyst + institutional discovery",
+            f"Revenue accelerates beyond {rg:.0f}%",
+            f"Catalysts: {cat_bull_text}",
+            f"Bull: +{bull_pct*100:.0f}% — full catalyst stack + institutional re-rating",
             f"Bull price = {fmt_p(price)} × {1+bull_pct:.2f} = {fmt_p(bull_p)}",
-            "Catalyst required: contract win, partnership, or coverage initiation",
-            *(["Dilution risk limits upside vs market cap appreciation"] if not is_profitable else []),
+            *(["Limited dilution — catalysts reduce need for equity raise"] if not is_profitable else []),
         ]
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -2329,27 +2423,26 @@ def _compute_internal_projections(
     else:
         bear_p = round(price * 0.75, 2)
         base_p = round(price * 1.10, 2)
-        bull_p = round(price * 1.40, 2)
+        bull_p = round(price * (1.40 + catalyst_score * 0.05), 2)
         methodology_note = (
             "Methodology: Statistical heuristic — insufficient fundamental data for quantitative modelling. "
             "Scenarios based on typical small/mid-cap equity return distributions."
         )
-        bear_reason  = "Macro headwinds, sector rotation, or execution risk. Insufficient data for deeper analysis."
-        base_reason  = "Modest appreciation in line with broad market, assuming no material fundamental change."
-        bull_reason  = "Positive catalyst (earnings beat, partnership, or contract win) closes gap to intrinsic value."
+        bear_reason  = "Macro headwinds, sector rotation, or execution risk. No catalyst materializes. Insufficient data for deeper analysis."
+        base_reason  = f"Modest appreciation + {cat_base_text} partially materializes."
+        bull_reason  = f"Positive catalyst ({cat_bull_text}) re-rates the stock meaningfully higher."
         bear_assumptions = [
             "Insufficient financial data for quantitative modelling",
             "Bear: –25% (typical small/mid-cap drawdown on negative catalyst)",
             f"Bear price = {fmt_p(price)} × 0.75 = {fmt_p(bear_p)}",
         ]
         base_assumptions = [
-            "Base: +10% (broad market return, no catalyst)",
+            f"Base: +10% (broad market return + {cat_base_text})",
             f"Base price = {fmt_p(price)} × 1.10 = {fmt_p(base_p)}",
         ]
         bull_assumptions = [
-            "Bull: +40% (positive catalyst or fundamental improvement)",
-            f"Bull price = {fmt_p(price)} × 1.40 = {fmt_p(bull_p)}",
-            "Requires: earnings beat, contract win, or partnership announcement",
+            f"Bull: +{round((bull_p/price-1)*100):.0f}% ({cat_bull_text})",
+            f"Bull price = {fmt_p(price)} × {bull_p/price:.2f} = {fmt_p(bull_p)}",
         ]
 
     fundamental = {
@@ -2362,82 +2455,88 @@ def _compute_internal_projections(
 
     # ─────────────────────────────────────────────────────────────────────────
     # SPECULATIVE 3-YEAR PROJECTION
-    # Uses market-cap-based approach with explicit dilution and TAM sanity check
-    # Only generated for small/mid-caps (mc < 50B) with meaningful growth
+    # Market-cap approach: project revenue with deceleration, apply terminal
+    # multiple, subtract debt/add cash, divide by diluted shares.
+    # Catalyst score raises the terminal multiple and reduces dilution assumption.
+    # Bull-case optionality (gov contract, M&A synergy) baked into the narrative.
     # ─────────────────────────────────────────────────────────────────────────
     speculative = None
     rg_for_spec = rg if has_rev_growth else None
     if mc > 0 and mc < 50 and rg_for_spec and rg_for_spec >= 15:
 
-        # Year-by-year revenue projection with mandatory deceleration
-        # Cap starting CAGR at 80% — anything above is noise in micro-caps
+        # Revenue CAGR with mandatory deceleration; cap Y1 at 80%
         cagr_y1 = min(rg_for_spec / 100.0, 0.80)
-        cagr_y2 = cagr_y1 * 0.70
-        cagr_y3 = cagr_y2 * 0.65
+        cagr_y2 = cagr_y1 * 0.68
+        cagr_y3 = cagr_y2 * 0.60
 
         rev_y1 = rev * (1 + cagr_y1) if rev > 0 else None
         rev_y2 = rev_y1 * (1 + cagr_y2) if rev_y1 else None
         rev_y3 = rev_y2 * (1 + cagr_y3) if rev_y2 else None
 
-        # Terminal EV/Revenue multiple at year 3 (compress from current — companies mature)
-        # Cap terminal multiple at 15× — only elite SaaS/tech sustains above that
+        # Catalyst bonus: high-catalyst companies can have an incremental
+        # revenue boost by year 3 from contract wins / acquisition synergies
+        if rev_y3 and catalyst_score >= 3:
+            synergy_mult = 1.0 + (catalyst_score - 2) * 0.12   # +12–36% revenue bonus
+            rev_y3_adj = rev_y3 * synergy_mult
+            synergy_note = f" Includes ~{round((synergy_mult-1)*100):.0f}% revenue synergy bonus from {cat_base_text} by year 3."
+        else:
+            rev_y3_adj = rev_y3
+            synergy_note = ""
+
         if has_pe and is_profitable:
-            # Growing profitable: model terminal P/E, not EV/Rev
-            # Assume EPS grows at rg * 0.6 (operating leverage, but conservative)
-            eps_cagr = min(rg_for_spec / 100.0 * 0.60, 0.45)
-            pe_terminal = clamp(pe * 0.85, 10.0, 60.0)  # PE compresses as company matures
+            eps_cagr = min(rg_for_spec / 100.0 * 0.55, 0.40)
+            pe_terminal = clamp(pe * (0.80 + catalyst_score * 0.02), 10.0, 65.0)
             implied_eps_now = price / pe
             spec_eps = implied_eps_now * (1 + eps_cagr) ** 3
             spec_mc = (spec_eps * pe_terminal * (shares_m * 1e6 if shares_m else mc * 1e9 / price)) / 1e9
-            # ~5% dilution over 3 yrs for profitable companies
-            dilution_3yr = 1.05
+            dilution_3yr = max(1.02, 1.08 - catalyst_score * 0.01)   # less dilution for catalyst-rich
             spec_shares  = (shares_m * 1e6 * dilution_3yr) if shares_m else None
             spec_p = clamp(
-                round((spec_mc * 1e9) / spec_shares, 2) if spec_shares else round(price * (1 + eps_cagr)**3 * 0.85, 2),
-                price * 0.90, price * 5.0
+                round((spec_mc * 1e9) / spec_shares, 2) if spec_shares else round(price * (1+eps_cagr)**3, 2),
+                price * 1.0, price * 6.0
             )
             spec_r = (
-                f"3-year outlook (P/E model): EPS compounds at ~{eps_cagr*100:.0f}%/yr "
+                f"3-year outlook (P/E model): EPS compounds ~{eps_cagr*100:.0f}%/yr "
                 f"(revenue growth × operating leverage, decelerating). "
-                f"Terminal P/E compresses to {pe_terminal:.0f}× as the company matures. "
-                f"~5% cumulative dilution (stock comp). "
-                f"Implied market cap: ~${spec_mc:.1f}B. Price target: {fmt_p(spec_p)}. "
-                f"Key risks: multiple compression, macro shock, execution shortfall."
+                + (f"{cat_bull_text} creates additional EPS upside not captured in consensus. " if catalyst_score >= 2 else "")
+                + f"Terminal P/E: {pe_terminal:.0f}× (slight compression as company matures). "
+                f"~{round((dilution_3yr-1)*100):.0f}% cumulative dilution. "
+                f"Implied market cap: ~${spec_mc:.1f}B. 3-year target: {fmt_p(spec_p)}."
             )
         elif has_ev_rev and rev_y3:
-            # Terminal EV/Rev: compress from current, cap at 15×
-            terminal_evr = clamp(ev_r * 0.65, 1.0, 15.0)
-            spec_ev  = rev_y3 * terminal_evr
-            spec_mc  = spec_ev - debt + cash
-            # Pre-profit: ~30-35% cumulative dilution over 3 years
-            dilution_3yr = 1.32
+            # Terminal EV/Rev: anchored to current, compressed for maturity,
+            # boosted by catalyst score for high-optionality companies
+            terminal_evr = clamp(ev_r * (0.60 + catalyst_score * 0.05), 0.8, 20.0)
+            spec_ev  = (rev_y3_adj or rev_y3) * terminal_evr
+            spec_mc  = max(spec_ev - debt + cash, 0.001)
+            # Dilution over 3 years: less for high-catalyst (better access to capital)
+            dilution_3yr = max(1.10, 1.35 - catalyst_score * 0.05)
             spec_shares  = (shares_m * 1e6 * dilution_3yr) if shares_m else None
             spec_p = clamp(
                 round((spec_mc * 1e9) / spec_shares, 2) if spec_shares else round(price * 2.5, 2),
-                price * 0.80, price * 8.0
+                price * 1.0, price * 10.0
             )
+            rev_path = (f"${rev:.3f}B → ${rev_y1:.3f}B → ${rev_y2:.3f}B → ${rev_y3:.3f}B"
+                        if rev_y1 and rev_y2 and rev_y3 else "N/A")
             spec_r = (
-                f"3-year outlook (EV/Revenue model): revenue projected at "
-                f"${rev:.2f}B → ${rev_y1:.2f}B → ${rev_y2:.2f}B → ${rev_y3:.2f}B "
-                f"(growth decelerates from {rg:.0f}% → {cagr_y1*100:.0f}% → {cagr_y2*100:.0f}% → {cagr_y3*100:.0f}%). "
-                f"Terminal EV/Revenue multiple compresses from {ev_r:.1f}× to {terminal_evr:.1f}× "
-                f"(companies trade at lower multiples as they scale). "
-                f"~32% cumulative share dilution modelled (pre-profit equity raises + stock comp). "
-                f"Implied market cap: ~${spec_mc:.1f}B. Price target: {fmt_p(spec_p)}. "
-                f"Key risks: dilution above forecast, revenue misses, sector multiple compression."
+                f"3-year outlook (EV/Revenue): revenue path {rev_path} "
+                f"(CAGRs: {cagr_y1*100:.0f}% → {cagr_y2*100:.0f}% → {cagr_y3*100:.0f}%, decelerating).{synergy_note} "
+                f"Terminal EV/Revenue: {terminal_evr:.1f}× (compresses from {ev_r:.1f}× as company scales). "
+                f"~{round((dilution_3yr-1)*100):.0f}% cumulative share dilution over 3 years. "
+                f"Implied market cap: ~${spec_mc:.1f}B. 3-year target: {fmt_p(spec_p)}. "
+                f"Key upside: {cat_bull_text}. Key risks: dilution, revenue miss, sector compression."
             )
         else:
-            # Revenue heuristic 3-yr: fixed bands with deceleration
-            capped_cagr  = min(rg_for_spec / 100.0, 0.60)
-            # 3yr price = price × (1+cagr)^1 × (1+cagr*0.7)^1 × (1+cagr*0.5)^1 ÷ dilution
-            raw_mult = (1 + capped_cagr) * (1 + capped_cagr * 0.70) * (1 + capped_cagr * 0.50)
-            dilution_3yr = 1.25  # ~25% dilution for no-data pre-profit
-            spec_p = clamp(round(price * raw_mult / dilution_3yr, 2), price * 0.90, price * 5.0)
+            capped_cagr = min(rg_for_spec / 100.0, 0.55)
+            raw_mult = (1 + capped_cagr) * (1 + capped_cagr * 0.68) * (1 + capped_cagr * 0.50)
+            dilution_3yr = max(1.10, 1.28 - catalyst_score * 0.04)
+            cat_mult = 1.0 + catalyst_score * 0.08   # up to +40% from catalysts
+            spec_p = clamp(round(price * raw_mult * cat_mult / dilution_3yr, 2), price * 1.0, price * 7.0)
             spec_r = (
-                f"3-year outlook (growth heuristic): revenue growth decelerates from "
-                f"{rg:.0f}% → {capped_cagr*100:.0f}% → {capped_cagr*70:.0f}% → {capped_cagr*50:.0f}%. "
-                f"~25% cumulative share dilution assumed (equity raises + stock comp for pre-profit stage). "
-                f"Price target: {fmt_p(spec_p)}. Requires sustained execution and no major dilutive events."
+                f"3-year heuristic: revenue growth decelerates {rg:.0f}% → {capped_cagr*100:.0f}% → {capped_cagr*68:.0f}% → {capped_cagr*50:.0f}%. "
+                + (f"{cat_bull_text} provides additional upside not in base growth assumptions. " if catalyst_score >= 2 else "")
+                + f"~{round((dilution_3yr-1)*100):.0f}% cumulative dilution. "
+                f"3-year target: {fmt_p(spec_p)}."
             )
 
         speculative = {
@@ -2573,6 +2672,8 @@ async def search_ticker(ticker: str):
             total_cash_b   = cash_b,
             total_debt_b   = debt_b,
             wk52_change_pct= round(wk52_chg * 100, 1) if wk52_chg else None,
+            sector         = g("sector"),
+            industry       = g("industry"),
         )
 
         optimal_play = _compute_optimal_play(
@@ -2728,6 +2829,8 @@ async def ticker_info(ticker: str):
             total_cash_b   = cash_b,
             total_debt_b   = debt_b,
             wk52_change_pct= round(wk52_chg * 100, 1) if wk52_chg else None,
+            sector         = g("sector"),
+            industry       = g("industry"),
         ) if price else None
 
         optimal_play = _compute_optimal_play(
