@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -55,7 +56,7 @@ async def basic_auth_middleware(request: Request, call_next):
         headers={"WWW-Authenticate": 'Basic realm="Asymmetric Stock Screener"'},
     )
 
-executor = ThreadPoolExecutor(max_workers=18)
+executor = ThreadPoolExecutor(max_workers=6)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TREND UNIVERSE
@@ -679,9 +680,33 @@ def fetch_option_metrics(stock) -> dict:
 
 
 def fetch_stock_data(ticker: str, trend_override: str = None) -> dict:
+    # Stagger requests to avoid Yahoo Finance rate limiting on burst load
+    time.sleep(random.uniform(0.1, 2.5))
+
+    info = None
+    last_err = None
+    for attempt in range(4):
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            if info and (info.get("currentPrice") or info.get("regularMarketPrice") or info.get("regularMarketOpen")):
+                break  # good data received
+            # empty info — treat as soft failure, retry
+            time.sleep((2 ** attempt) + random.uniform(0, 1))
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if "Too Many Requests" in err_str or "Rate" in err_str or "429" in err_str:
+                wait = (2 ** attempt) * 3 + random.uniform(0, 2)
+                time.sleep(wait)
+                continue
+            # Non-rate-limit error — bail immediately
+            return {"ticker": ticker, "error": err_str}
+
+    if not info:
+        return {"ticker": ticker, "error": f"No data after retries: {last_err}"}
+
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
 
         def g(k, default=None):
             v = info.get(k, default)
