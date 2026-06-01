@@ -2007,7 +2007,13 @@ def _compute_internal_projections(
 ):
     """
     Build fundamental + speculative 1-year price projections with written reasoning.
-    Returns a dict consumed by the search panel frontend.
+
+    Key design principles:
+    - Revenue growth % does NOT directly map to stock price growth.
+    - Prices are derived from per-share value (EV → market cap → ÷ diluted shares).
+    - Share dilution is explicitly modelled for pre-profit companies.
+    - All outputs are capped to realistic single-year and 3-year ranges.
+    - Micro-cap 'revenue_heuristic' uses conservative fixed bands, not rg multiples.
     """
     if not price or price <= 0:
         return None
@@ -2017,248 +2023,333 @@ def _compute_internal_projections(
     om   = op_margin       # percent, e.g. 12.0
     pe   = fwd_pe
     ev_r = ev_rev
-    mc   = market_cap_b or 0
+    mc   = market_cap_b or 0   # $B
+    rev  = total_rev_b  or 0   # $B
+    cash = total_cash_b or 0   # $B
+    debt = total_debt_b or 0   # $B
 
-    is_profitable   = om is not None and om > 0
-    has_rev_growth  = rg is not None
-    has_pe          = pe  is not None and pe > 0 and pe < 500  # ignore nonsensical values
-    has_ev_rev      = ev_r is not None and ev_r > 0
+    is_profitable  = om is not None and om > 0
+    has_rev_growth = rg is not None
+    has_pe         = pe is not None and pe > 0 and pe < 300
+    has_ev_rev     = ev_r is not None and ev_r > 0
+
+    # Implied share count (millions) from market cap and price
+    shares_m = (mc * 1000 / price) if mc > 0 and price > 0 else None
 
     # ── choose methodology ──
-    # Use pe_beat_miss only when we have a valid forward P/E (3 < pe < 500)
     has_valid_pe = has_pe and pe > 3
     if has_valid_pe:
         method = "pe_beat_miss"
-    elif has_ev_rev and has_rev_growth:
+    elif has_ev_rev and has_rev_growth and rev > 0:
         method = "ev_revenue"
     elif has_rev_growth:
         method = "revenue_heuristic"
     else:
         method = "price_heuristic"
 
-    # ── helper ──
-    def pct(p): return round((p / price - 1) * 100, 1)
+    def pct(p):
+        return round((p / price - 1) * 100, 1)
 
-    # ────────────────────────────────────────────────────────────────────────────
+    def clamp(val, lo, hi):
+        return max(lo, min(hi, val))
+
+    def fmt_p(p):
+        return f"${p:,.2f}"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # METHOD 1: Forward P/E Beat/Miss (profitable companies with analyst EPS)
+    # ─────────────────────────────────────────────────────────────────────────
     if method == "pe_beat_miss":
-        # Beat/miss vs consensus framework.
-        # The current price already implies what the market expects in EPS:
-        #   implied_eps = price / fwd_pe
-        # We then model bear (big miss + PE de-rate), base (small beat, flat PE),
-        # bull (strong beat + PE expansion).
         implied_eps = price / pe
-        pe_floor = max(10, round(pe * 0.55, 1))   # severe de-rating floor
-        pe_ceil  = round(pe * 1.35, 1)             # expansion ceiling
 
-        bear_eps = implied_eps * 0.70   # 30% EPS miss vs consensus
-        base_eps = implied_eps * 1.06   # 6% beat — modest outperformance
-        bull_eps = implied_eps * 1.22   # 22% beat — strong execution
+        # Tiered PE floor/ceiling based on current multiple
+        if pe < 15:
+            pe_floor = max(8,  round(pe * 0.65, 1))
+            pe_ceil  = round(pe * 1.20, 1)
+            bear_floor_pct, bull_ceil_pct = 0.80, 1.30
+        elif pe < 25:
+            pe_floor = max(12, round(pe * 0.60, 1))
+            pe_ceil  = round(pe * 1.25, 1)
+            bear_floor_pct, bull_ceil_pct = 0.72, 1.45
+        elif pe < 40:
+            pe_floor = max(15, round(pe * 0.55, 1))
+            pe_ceil  = round(pe * 1.30, 1)
+            bear_floor_pct, bull_ceil_pct = 0.65, 1.60
+        else:
+            pe_floor = max(20, round(pe * 0.50, 1))
+            pe_ceil  = round(pe * 1.30, 1)
+            bear_floor_pct, bull_ceil_pct = 0.58, 1.70
 
-        bear_p = round(bear_eps * pe_floor, 2)
-        # Bear-case floor: lower-PE value stocks have smaller realistic drawdowns
-        bear_floor = 0.78 if pe < 15 else 0.70 if pe < 25 else 0.62
-        bear_p = max(bear_p, round(price * bear_floor, 2))
-        base_p = round(base_eps * pe, 2)
-        bull_p = round(bull_eps * pe_ceil, 2)
-        bull_p = max(bull_p, round(price * 1.20, 2))   # floor: min +20%
+        bear_eps = implied_eps * 0.72   # 28% EPS miss
+        base_eps = implied_eps * 1.06   # 6% beat
+        bull_eps = implied_eps * 1.20   # 20% beat
 
-        rule_of_40 = (rg or 0) + (om or 0)
-        r40_note = (
-            f"Rule of 40 = {rule_of_40:.0f} (strong)." if rule_of_40 >= 40
-            else f"Rule of 40 = {rule_of_40:.0f} (improving)." if rule_of_40 >= 25
-            else f"Rule of 40 = {rule_of_40:.0f} — below target."
-        )
-        peg_note = (
-            f" PEG ratio {peg_ratio:.2f} ({'attractive' if peg_ratio < 1 else 'fair' if peg_ratio < 2 else 'stretched'})."
-            if peg_ratio and peg_ratio > 0 else ""
-        )
-        rg_str = f"{rg:.0f}% YoY" if rg is not None else "unavailable"
+        bear_p = clamp(round(bear_eps * pe_floor, 2), price * bear_floor_pct, price * 0.95)
+        base_p = clamp(round(base_eps * pe,       2), price * 0.98,           price * bull_ceil_pct)
+        bull_p = clamp(round(bull_eps * pe_ceil,  2), price * 1.12,           price * bull_ceil_pct)
+
+        rg_str = f"{rg:.0f}% YoY" if rg is not None else "N/A"
         om_str = f"{om:.1f}%" if om is not None else "N/A"
+        r40    = (rg or 0) + (om or 0)
+        r40_note = (f"Rule of 40 = {r40:.0f} ({'strong' if r40>=40 else 'improving' if r40>=25 else 'below target'}).")
+        peg_note = (f" PEG {peg_ratio:.2f}× ({'attractive' if peg_ratio < 1 else 'fair' if peg_ratio < 2 else 'stretched'})."
+                    if peg_ratio and peg_ratio > 0 else "")
 
         methodology_note = (
-            f"Methodology: Beat/Miss vs Consensus (Forward P/E framework). "
-            f"Current fwd P/E: {pe:.0f}×, implied EPS: ${implied_eps:.2f}. "
+            f"Methodology: Earnings beat/miss vs consensus (Forward P/E). "
+            f"Fwd P/E: {pe:.0f}×, implied EPS: {fmt_p(implied_eps)}. "
             f"Revenue growth: {rg_str}, operating margin: {om_str}. {r40_note}{peg_note}"
         )
         bear_reason = (
-            f"EPS misses consensus by ~30% (implied EPS ${implied_eps:.2f} → actual ${bear_eps:.2f}), "
-            f"driven by revenue deceleration{(' to ~' + str(round(rg*0.4,0)) + '%') if rg else ''} or margin compression. "
-            f"Market re-rates the multiple from {pe:.0f}× down to {pe_floor:.0f}× "
-            f"({'a –' + str(round((1-pe_floor/pe)*100)) + '% de-rating'}) as growth-premium justification erodes. "
-            + ("High short interest ({:.0f}% of float) amplifies the selling on any miss.".format(short_pct)
-               if short_pct and short_pct >= 15
-               else f"Operating leverage cuts both ways — margin compression accelerates the EPS shortfall.")
+            f"EPS misses consensus by ~28% ({fmt_p(implied_eps)} → {fmt_p(bear_eps)}), driven by "
+            f"revenue deceleration{(f' to ~{rg*0.4:.0f}%') if rg else ''} or margin compression. "
+            f"Multiple de-rates from {pe:.0f}× to {pe_floor:.0f}×. "
+            + ("High short interest amplifies selling." if short_pct and short_pct >= 15
+               else "Operating leverage cuts both ways when revenue disappoints.")
         )
         bear_assumptions = [
-            f"Implied EPS (consensus): ${implied_eps:.2f}",
-            f"Bear EPS (–30% miss): ${bear_eps:.2f}",
-            f"Forward P/E de-rates: {pe:.0f}× → {pe_floor:.0f}× (–{round((1-pe_floor/pe)*100):.0f}%)",
-            f"Revenue growth decelerates to ~{round(rg*0.4,0) if rg else 'N/A'}%",
-            f"Bear price = ${bear_eps:.2f} EPS × {pe_floor:.0f}× P/E = ${bear_p}",
-            *([ f"Short interest: {short_pct:.0f}% of float — amplifies downside on a miss"] if short_pct and short_pct >= 15 else []),
-            *([ f"Operating margin: {om:.1f}% — cuts both ways on miss"] if is_profitable else []),
+            f"Implied consensus EPS: {fmt_p(implied_eps)}",
+            f"Bear EPS (–28% miss): {fmt_p(bear_eps)}",
+            f"P/E de-rates: {pe:.0f}× → {pe_floor:.0f}× ({round((1-pe_floor/pe)*100):.0f}% compression)",
+            *([ f"Revenue growth decelerates to ~{rg*0.4:.0f}%"] if rg else []),
+            f"Bear price = {fmt_p(bear_eps)} × {pe_floor:.0f}× = {fmt_p(bear_p)}",
+            *([ f"Short interest {short_pct:.0f}% of float — amplifies downside"] if short_pct and short_pct >= 15 else []),
         ]
         base_reason = (
-            f"EPS beats consensus by ~6% (${base_eps:.2f} vs implied ${implied_eps:.2f}), "
-            f"consistent with modest execution outperformance. "
-            f"P/E holds at {pe:.0f}× — the market continues to pay a growth premium. "
-            + (f"Operating margin of {om:.1f}% provides a cushion for earnings leverage."
-               if is_profitable else "Revenue execution stays on track; profitability runway remains intact.")
+            f"EPS beats consensus by ~6% ({fmt_p(base_eps)} vs {fmt_p(implied_eps)}). "
+            f"P/E holds at {pe:.0f}× — market continues to pay a growth premium. "
+            + (f"Operating margin of {om:.1f}% provides cushion for earnings leverage."
+               if is_profitable else "Revenue on track; profitability runway intact.")
         )
         base_assumptions = [
-            f"Implied EPS (consensus): ${implied_eps:.2f}",
-            f"Base EPS (+6% beat): ${base_eps:.2f}",
-            f"Forward P/E holds: {pe:.0f}× (no re-rating)",
-            f"Revenue growth continues at ~{rg:.0f}%" if rg else "Revenue growth: unavailable",
-            f"Base price = ${base_eps:.2f} EPS × {pe:.0f}× P/E = ${base_p}",
-            *([ f"Operating margin: {om:.1f}% — earnings leverage above revenue growth"] if is_profitable else []),
-            *([ f"PEG ratio: {peg_ratio:.2f}"] if peg_ratio else []),
+            f"Implied consensus EPS: {fmt_p(implied_eps)}",
+            f"Base EPS (+6% beat): {fmt_p(base_eps)}",
+            f"P/E stable at {pe:.0f}× (no re-rating assumed)",
+            *([ f"Revenue growth ~{rg:.0f}% continues"] if rg else []),
+            f"Base price = {fmt_p(base_eps)} × {pe:.0f}× = {fmt_p(base_p)}",
+            *([ f"Operating margin: {om:.1f}%"] if is_profitable else []),
         ]
         bull_reason = (
-            f"EPS beats consensus by ~22% (${bull_eps:.2f} vs implied ${implied_eps:.2f}), "
-            f"driven by{(' accelerating revenue (' + str(round(rg*1.3,0)) + '%)' + ',') if rg else ''} "
-            f"margin expansion, or guidance raised. "
-            f"P/E expands from {pe:.0f}× to {pe_ceil:.0f}× (+35%) as the earnings power thesis "
-            f"is validated by institutional investors. "
-            + (f"At {om:.1f}% operating margin, each additional point of scale generates outsized EPS leverage."
-               if is_profitable else "Margin inflection toward profitability triggers a re-rating from 'growth' to 'growth + earnings' multiple.")
+            f"EPS beats by ~20% ({fmt_p(bull_eps)} vs {fmt_p(implied_eps)}), driven by "
+            f"{(f'accelerating revenue (~{rg*1.25:.0f}%), ' ) if rg else ''}margin expansion or raised guidance. "
+            f"P/E expands to {pe_ceil:.0f}× as the earnings thesis is validated. "
+            + (f"At {om:.1f}% operating margin, incremental revenue drives outsized EPS leverage."
+               if is_profitable else "Profitability inflection triggers a re-rating to an earnings multiple.")
         )
         bull_assumptions = [
-            f"Implied EPS (consensus): ${implied_eps:.2f}",
-            f"Bull EPS (+22% beat): ${bull_eps:.2f}",
-            f"Forward P/E expands: {pe:.0f}× → {pe_ceil:.0f}× (+35% re-rating)",
-            f"Revenue growth accelerates to ~{round(rg*1.3,0) if rg else 'N/A'}%",
-            f"Bull price = ${bull_eps:.2f} EPS × {pe_ceil:.0f}× P/E = ${bull_p}",
-            *([ f"Rule of 40 = {round((rg or 0)+(om or 0), 0):.0f} {'(strong)' if (rg or 0)+(om or 0)>=40 else '(improving)'}"] if rg or om else []),
-            *([ f"Operating margin expansion from {om:.1f}% drives EPS leverage"] if is_profitable else ["Profitability inflection → multiple re-rating catalyst"]),
+            f"Implied consensus EPS: {fmt_p(implied_eps)}",
+            f"Bull EPS (+20% beat): {fmt_p(bull_eps)}",
+            f"P/E expands: {pe:.0f}× → {pe_ceil:.0f}× ({round((pe_ceil/pe-1)*100):.0f}% expansion)",
+            *([ f"Revenue growth accelerates to ~{rg*1.25:.0f}%"] if rg else []),
+            f"Bull price = {fmt_p(bull_eps)} × {pe_ceil:.0f}× = {fmt_p(bull_p)}",
+            *([ f"Rule of 40 = {r40:.0f}"] if rg or om else []),
         ]
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # METHOD 2: EV/Revenue model (pre-profit, has revenue data)
+    # Uses per-share math: project forward EV → market cap → ÷ diluted shares
+    # Revenue growth is an INPUT to the valuation, not a direct price multiplier
+    # ─────────────────────────────────────────────────────────────────────────
     elif method == "ev_revenue":
-        rg_d = rg / 100
-        r40  = rg + (om or 0)
+        # Cap revenue growth used in forward projections at 120%
+        rg_calc = min(rg, 120.0)
+        rg_d    = rg_calc / 100.0
 
-        # EV/Revenue beat/miss framework for pre-profit companies:
-        # Bear: revenue misses by ~35%, EV/Rev contracts 45%
-        # Base: revenue meets expectations, EV/Rev holds
-        # Bull: revenue beats by ~55%, EV/Rev expands 50%
-        bear_p = round(price * (1 + rg_d * 0.35) * 0.55, 2)
-        bear_p = max(bear_p, round(price * 0.60, 2))  # floor: max –40% in one year
-        base_p = round(price * (1 + rg_d * 0.90),     2)  # slight moderation baked in
-        bull_p = round(price * (1 + rg_d * 1.55) * 1.50, 2)
-        bull_p = max(bull_p, round(price * 1.25, 2))
-        bear_evr = round(ev_r * 0.55, 1);  bull_evr = round(ev_r * 1.50, 1)
+        # Sector-aware EV/Rev multiple bands (using current as anchor)
+        # Bear: revenue misses + multiple contracts; Bull: beat + modest re-rate
+        # Multiple caps prevent unrealistic targets
+        ev_r_cap   = min(ev_r, 40.0)   # no model above 40× EV/Rev
+        bear_mult  = clamp(ev_r_cap * 0.55, 0.5, 20.0)
+        base_mult  = clamp(ev_r_cap * 0.95, 0.5, 35.0)  # slight compression baked in
+        bull_mult  = clamp(ev_r_cap * 1.20, 0.5, 40.0)  # max +20% re-rate in one year
 
-        gm_note = (f" Gross margin of {gm:.0f}% shows clear path to operating leverage at scale."
-                   if gm and gm >= 60 else
-                   f" Gross margin of {gm:.0f}% needs improvement for profitability." if gm else "")
+        # Forward revenue scenarios
+        bear_rev = rev * (1 + rg_d * 0.30)   # revenue misses badly
+        base_rev = rev * (1 + rg_d * 0.85)   # revenue roughly on plan
+        bull_rev = rev * (1 + rg_d * 1.15)   # revenue beats
+
+        # EV per scenario
+        bear_ev = bear_rev * bear_mult
+        base_ev = base_rev * base_mult
+        bull_ev  = bull_rev * bull_mult
+
+        # Market cap = EV − debt + cash
+        bear_mc = bear_ev - debt + cash
+        base_mc = base_ev - debt + cash
+        bull_mc  = bull_ev  - debt + cash
+
+        # Pre-profit companies dilute ~10–18% per year via stock-based comp / raises
+        dilution_bear = 1.15   # bear: more dilution (equity raise likely)
+        dilution_base = 1.10
+        dilution_bull = 1.08   # bull: less dilution (executes, less need to raise)
+
+        if shares_m and shares_m > 0:
+            bear_p = clamp(round((bear_mc * 1e9) / (shares_m * 1e6 * dilution_bear), 2),
+                           price * 0.40, price * 0.90)
+            base_p = clamp(round((base_mc * 1e9) / (shares_m * 1e6 * dilution_base), 2),
+                           price * 0.85, price * 1.50)
+            bull_p = clamp(round((bull_mc  * 1e9) / (shares_m * 1e6 * dilution_bull),  2),
+                           price * 1.10, price * 2.20)
+        else:
+            # Fallback: fixed pct bands
+            bear_p = round(price * 0.65, 2)
+            base_p = round(price * 1.05, 2)
+            bull_p = round(price * 1.45, 2)
+
+        r40 = rg + (om or 0)
+        gm_note = (f" Gross margin {gm:.0f}% — clear path to scale profitability." if gm and gm >= 60
+                   else f" Gross margin {gm:.0f}% needs improvement." if gm else "")
         methodology_note = (
-            f"Methodology: EV/Revenue multiple model (pre-profit growth company). "
-            f"Current EV/Rev: {ev_r:.1f}×, revenue growth: {rg:.0f}% YoY. "
-            f"Rule of 40 = {r40:.0f}.{gm_note}"
+            f"Methodology: EV/Revenue model (pre-profit growth company). "
+            f"Current EV/Rev: {ev_r:.1f}×, revenue: ${rev:.2f}B, revenue growth: {rg:.0f}% YoY. "
+            f"Rule of 40 = {r40:.0f}. Share dilution of 8–15% per year modelled explicitly.{gm_note}"
         )
         bear_reason = (
-            f"Revenue growth slows to ~{rg*0.30:.0f}% and the market loses patience with the path "
-            f"to profitability. EV/Revenue contracts from {ev_r:.1f}× to {bear_evr:.1f}× — "
-            f"consistent with how comparable pre-profit companies re-rate on deceleration. "
-            + ("High short interest means a miss triggers outsized selling." if short_pct and short_pct >= 12
-               else "Cash burn risk could force a dilutive equity raise, capping upside.")
+            f"Revenue growth slows to ~{rg*0.30:.0f}% (execution miss). "
+            f"EV/Revenue contracts from {ev_r:.1f}× to {bear_mult:.1f}× as the market loses "
+            f"patience with the profitability timeline. ~15% share dilution from an equity raise "
+            f"further erodes per-share value. "
+            + ("High short interest amplifies selling on a miss." if short_pct and short_pct >= 12
+               else "Cash burn forces a dilutive raise, capping recovery.")
         )
         bear_assumptions = [
             f"Revenue growth decelerates to ~{rg*0.30:.0f}% (miss scenario)",
-            f"EV/Revenue contracts: {ev_r:.1f}× → {bear_evr:.1f}× (–45% de-rating)",
-            f"Bear price = current price × (1 + {rg*0.35/100:.3f}) × 0.55 = ${bear_p}",
-            *([ f"Gross margin: {gm:.0f}% — profitability path in doubt at lower revenue"] if gm else []),
-            *([ f"Short interest: {short_pct:.0f}% — forced selling on miss"] if short_pct and short_pct >= 12 else []),
-            f"Key risk: dilutive equity raise if cash burn continues",
+            f"Forward revenue: ${bear_rev:.3f}B",
+            f"EV/Revenue contracts: {ev_r:.1f}× → {bear_mult:.1f}× (–{round((1-bear_mult/ev_r)*100):.0f}%)",
+            f"Implied EV: ${bear_ev:.2f}B → market cap: ${bear_mc:.2f}B",
+            f"Share dilution: ~15% (equity raise assumed)",
+            f"Bear price ≈ {fmt_p(bear_p)}",
+            *([ f"Short interest: {short_pct:.0f}% — amplifies downside"] if short_pct and short_pct >= 12 else []),
         ]
         base_reason = (
-            f"Revenue growth holds at {rg:.0f}% YoY. EV/Revenue stays at {ev_r:.1f}× — "
-            f"the market continues paying this multiple for this growth rate. "
-            + (f"Gross margin of {gm:.0f}% provides a visible path to profitability, "
-               f"keeping the multiple supported." if gm and gm >= 55
-               else "Execution on the current roadmap keeps the valuation intact.")
+            f"Revenue roughly on plan at ~{rg*0.85:.0f}% growth. "
+            f"EV/Revenue compresses slightly to {base_mult:.1f}× (market anchors to growth rate). "
+            f"~10% dilution from stock-based compensation reduces per-share gains relative to market cap growth. "
+            + (f"Gross margin of {gm:.0f}% keeps the profitability thesis alive." if gm and gm >= 55
+               else "Execution on the current roadmap keeps the multiple supported.")
         )
         base_assumptions = [
-            f"Revenue growth holds at ~{rg*0.90:.0f}% (slight moderation)",
-            f"EV/Revenue multiple holds: {ev_r:.1f}× (market pays this for this growth rate)",
-            f"Rule of 40 = {r40:.0f}",
-            *([ f"Gross margin: {gm:.0f}% — supports profitability narrative"] if gm and gm >= 55 else []),
-            f"Base price = current price × (1 + {rg*0.90/100:.3f}) = ${base_p}",
+            f"Revenue growth ~{rg*0.85:.0f}% (slightly moderated)",
+            f"Forward revenue: ${base_rev:.3f}B",
+            f"EV/Revenue: {ev_r:.1f}× → {base_mult:.1f}× (slight compression)",
+            f"Implied EV: ${base_ev:.2f}B → market cap: ${base_mc:.2f}B",
+            f"Share dilution: ~10% (stock-based comp)",
+            f"Base price ≈ {fmt_p(base_p)}",
         ]
         bull_reason = (
-            f"Revenue growth reaccelerates to ~{rg*1.70:.0f}% through new partnerships, "
-            f"contract wins, or market expansion. EV/Revenue re-rates to {bull_evr:.1f}× as "
-            f"the profitability timeline becomes visible to institutional investors. "
-            + (f"Gross margins of {gm:.0f}% at scale imply high-quality earnings — "
-               f"re-rating from pre-profit to profitable company adds another leg up."
-               if gm and gm >= 60 else "A strategic partnership announcement could be the institutional discovery catalyst.")
+            f"Revenue beats at ~{rg*1.15:.0f}% growth via new contract wins or market expansion. "
+            f"EV/Revenue re-rates modestly to {bull_mult:.1f}× as near-term profitability becomes visible. "
+            f"Disciplined capital allocation limits dilution to ~8%. "
+            + (f"Gross margins of {gm:.0f}% at scale suggest high-quality future earnings."
+               if gm and gm >= 60 else "A major partnership or contract win brings institutional coverage.")
         )
         bull_assumptions = [
-            f"Revenue growth accelerates to ~{rg*1.70:.0f}% (new contracts / partnerships)",
-            f"EV/Revenue re-rates: {ev_r:.1f}× → {bull_evr:.1f}× (+50% multiple expansion)",
-            *([ f"Gross margin: {gm:.0f}% — at scale implies high-quality earnings"] if gm and gm >= 60 else []),
-            f"Bull price = current price × (1 + {rg*1.55/100:.3f}) × 1.50 = ${bull_p}",
-            f"Catalyst needed: major partnership, contract win, or institutional coverage initiation",
-            f"Requires: no equity dilution, continued gross margin expansion",
+            f"Revenue beats at ~{rg*1.15:.0f}% growth (new wins / expansion)",
+            f"Forward revenue: ${bull_rev:.3f}B",
+            f"EV/Revenue re-rates: {ev_r:.1f}× → {bull_mult:.1f}× (+{round((bull_mult/ev_r-1)*100):.0f}%)",
+            f"Implied EV: ${bull_ev:.2f}B → market cap: ${bull_mc:.2f}B",
+            f"Share dilution: ~8% (disciplined, no equity raise needed)",
+            f"Bull price ≈ {fmt_p(bull_p)}",
+            f"Catalyst: contract win, major partnership, or profitability milestone",
         ]
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # METHOD 3: Revenue heuristic (no EV/Rev, just growth signal)
+    # Uses fixed realistic bands rather than scaling with rg
+    # ─────────────────────────────────────────────────────────────────────────
     elif method == "revenue_heuristic":
-        rg_d = rg / 100
-        bear_p = round(price * (1 + rg_d * 0.25), 2)
-        base_p = round(price * (1 + rg_d * 0.80), 2)
-        bull_p = round(price * (1 + rg_d * 1.50), 2)
+        # Classify growth regime and apply realistic bands
+        if rg >= 100:
+            # Hyper-growth micro-cap: wide band but capped by realism
+            bear_pct, base_pct, bull_pct = -0.40, +0.10, +0.55
+            growth_label = "hyper-growth"
+        elif rg >= 50:
+            bear_pct, base_pct, bull_pct = -0.35, +0.12, +0.45
+            growth_label = "high-growth"
+        elif rg >= 25:
+            bear_pct, base_pct, bull_pct = -0.30, +0.12, +0.38
+            growth_label = "strong-growth"
+        elif rg >= 10:
+            bear_pct, base_pct, bull_pct = -0.25, +0.10, +0.28
+            growth_label = "moderate-growth"
+        else:
+            bear_pct, base_pct, bull_pct = -0.20, +0.07, +0.20
+            growth_label = "slow-growth"
+
+        bear_p = round(price * (1 + bear_pct), 2)
+        base_p = round(price * (1 + base_pct), 2)
+        bull_p = round(price * (1 + bull_pct), 2)
+
+        dil_note = " Share dilution of 10–20% per year typical for pre-profit companies at this stage." if not is_profitable else ""
         methodology_note = (
-            f"Methodology: Revenue momentum model. Revenue growth: {rg:.0f}% YoY. "
-            f"P/E and EV/Revenue unavailable; price implied by growth rate scenarios."
+            f"Methodology: Growth-regime heuristic (no P/E or EV/Revenue data available). "
+            f"Revenue growth: {rg:.0f}% YoY — classified as {growth_label}. "
+            f"Price bands reflect realistic equity return distributions for this growth tier.{dil_note}"
         )
-        bear_reason  = f"Growth momentum stalls at ~{rg*0.25:.0f}% — well below the current {rg:.0f}% run rate. Market discount widens."
-        base_reason  = f"Revenue growth moderates to ~{rg*0.80:.0f}%, sustaining the current valuation multiple."
-        bull_reason  = f"Revenue growth sustains near {rg:.0f}% or accelerates, driving a re-rating of the multiple."
+        bear_reason = (
+            f"Revenue growth decelerates sharply or guidance disappoints. "
+            f"Without a clear profitability timeline, the market re-prices the stock to a "
+            f"lower speculative premium. "
+            + ("Equity raise risk adds further dilution headwind." if not is_profitable else "Margin pressure limits earnings leverage.")
+        )
+        base_reason = (
+            f"Revenue continues at or near the current {rg:.0f}% trajectory. "
+            f"Valuation drifts modestly upward as growth is confirmed, though the absence of "
+            f"a clear earnings multiple limits multiple expansion."
+        )
+        bull_reason = (
+            f"Revenue reaccelerates or a major catalyst (contract win, partnership, coverage initiation) "
+            f"brings new institutional interest. Limited historical data means the upside is real but "
+            f"requires execution proof points to sustain."
+        )
         bear_assumptions = [
-            f"Revenue growth decelerates to ~{rg*0.25:.0f}% (25% of current pace)",
-            f"No P/E or EV/Revenue data — price scaled by momentum factor",
-            f"Bear price = ${price} × (1 + {rg*0.25/100:.3f}) = ${bear_p}",
-            "Multiple compression assumed as growth disappoints",
+            f"Revenue growth regime: {growth_label} ({rg:.0f}% current YoY)",
+            f"Bear band: {bear_pct*100:.0f}% — growth disappointment + risk-off de-rating",
+            f"Bear price = {fmt_p(price)} × {1+bear_pct:.2f} = {fmt_p(bear_p)}",
+            "No P/E or EV/Revenue anchor — band based on comparable growth-tier distributions",
+            *(["~15-20% dilution possible via equity raise"] if not is_profitable else []),
         ]
         base_assumptions = [
-            f"Revenue growth moderates to ~{rg*0.80:.0f}% (80% of current pace)",
-            f"Valuation multiple holds at current level",
-            f"Base price = ${price} × (1 + {rg*0.80/100:.3f}) = ${base_p}",
+            f"Revenue growth holds at ~{rg:.0f}%",
+            f"Base band: +{base_pct*100:.0f}% — growth confirmed, stable multiple",
+            f"Base price = {fmt_p(price)} × {1+base_pct:.2f} = {fmt_p(base_p)}",
+            *(["~10% dilution from stock-based comp assumed"] if not is_profitable else []),
         ]
         bull_assumptions = [
-            f"Revenue growth sustains at ~{rg*1.50:.0f}% (150% of current pace)",
-            f"Multiple expansion from continued outperformance",
-            f"Bull price = ${price} × (1 + {rg*1.50/100:.3f}) = ${bull_p}",
-            "Catalyst: new contract, partnership, or macro tailwind",
+            f"Revenue growth holds or accelerates above {rg:.0f}%",
+            f"Bull band: +{bull_pct*100:.0f}% — catalyst + institutional discovery",
+            f"Bull price = {fmt_p(price)} × {1+bull_pct:.2f} = {fmt_p(bull_p)}",
+            "Catalyst required: contract win, partnership, or coverage initiation",
+            *(["Dilution risk limits upside vs market cap appreciation"] if not is_profitable else []),
         ]
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # METHOD 4: Heuristic fallback (insufficient data)
+    # ─────────────────────────────────────────────────────────────────────────
     else:
-        bear_p = round(price * 0.72, 2)
+        bear_p = round(price * 0.75, 2)
         base_p = round(price * 1.10, 2)
-        bull_p = round(price * 1.45, 2)
+        bull_p = round(price * 1.40, 2)
         methodology_note = (
-            "Methodology: Heuristic price model — insufficient financial data for quantitative modeling. "
+            "Methodology: Statistical heuristic — insufficient fundamental data for quantitative modelling. "
             "Scenarios based on typical small/mid-cap equity return distributions."
         )
-        bear_reason  = "Macro headwinds, sector rotation, or company-specific execution risk. Limited data prevents deeper quantitative analysis."
-        base_reason  = "Modest appreciation in line with broad equity market + any fundamental improvement."
-        bull_reason  = "Positive catalyst (earnings beat, partnership, contract win) closes the gap to intrinsic value."
+        bear_reason  = "Macro headwinds, sector rotation, or execution risk. Insufficient data for deeper analysis."
+        base_reason  = "Modest appreciation in line with broad market, assuming no material fundamental change."
+        bull_reason  = "Positive catalyst (earnings beat, partnership, or contract win) closes gap to intrinsic value."
         bear_assumptions = [
-            "Insufficient financial data for quantitative modeling",
-            "Bear scenario: –28% drawdown (typical small/mid-cap distribution)",
-            f"Bear price = ${price} × 0.72 = ${bear_p}",
-            "Assumes macro headwind or sector rotation",
+            "Insufficient financial data for quantitative modelling",
+            "Bear: –25% (typical small/mid-cap drawdown on negative catalyst)",
+            f"Bear price = {fmt_p(price)} × 0.75 = {fmt_p(bear_p)}",
         ]
         base_assumptions = [
-            "Base scenario: +10% (in-line with broad equity market)",
-            f"Base price = ${price} × 1.10 = ${base_p}",
-            "Assumes no significant change in fundamentals",
+            "Base: +10% (broad market return, no catalyst)",
+            f"Base price = {fmt_p(price)} × 1.10 = {fmt_p(base_p)}",
         ]
         bull_assumptions = [
-            "Bull scenario: +45% (positive catalyst required)",
-            f"Bull price = ${price} × 1.45 = ${bull_p}",
-            "Assumes earnings beat, contract win, or partnership announcement",
-            "Multiple expansion from discovery / institutional coverage",
+            "Bull: +40% (positive catalyst or fundamental improvement)",
+            f"Bull price = {fmt_p(price)} × 1.40 = {fmt_p(bull_p)}",
+            "Requires: earnings beat, contract win, or partnership announcement",
         ]
 
     fundamental = {
@@ -2269,45 +2360,86 @@ def _compute_internal_projections(
         "bull": {"price": bull_p, "pct": pct(bull_p), "reasoning": bull_reason, "assumptions": bull_assumptions},
     }
 
-    # ── Speculative / asymmetric upside (3-year horizon) ──
+    # ─────────────────────────────────────────────────────────────────────────
+    # SPECULATIVE 3-YEAR PROJECTION
+    # Uses market-cap-based approach with explicit dilution and TAM sanity check
+    # Only generated for small/mid-caps (mc < 50B) with meaningful growth
+    # ─────────────────────────────────────────────────────────────────────────
     speculative = None
-    if mc > 0 and mc < 75 and has_rev_growth and rg and rg >= 15:
-        yrs = 3
-        # Project revenue CAGR, then apply a terminal multiple
-        # Low mc + high growth = potential 3-5× asymmetric
-        cagr = rg / 100
-        # Conservative: growth decelerates each year by 20%
-        proj_rev_mult = (1 + cagr) * (1 + cagr * 0.8) * (1 + cagr * 0.6)
-        # Multiple: if pre-profit, use current EV/Rev; if profitable, use P/E with margin improvement
-        if has_pe:
-            # Earnings grow faster than revenue due to op leverage
-            eps_cagr = cagr * (1.3 if is_profitable else 0.9)
-            sp_mult = 1.20  # modest P/E expansion over 3 years
-            spec_p  = round(price * (1 + eps_cagr)**yrs * sp_mult, 2)
-            spec_r  = (
-                f"Three-year horizon: if revenue grows at {rg:.0f}%→{rg*0.8:.0f}%→{rg*0.6:.0f}% "
-                f"(decelerating but sustained) and P/E expands 20% as earnings quality improves, "
-                f"the stock reaches ${spec_p}. "
-                f"Market cap would be ~${mc * (spec_p/price):.1f}B — still well within the range of "
-                f"comparable mature-stage comps in this sector. "
-                f"Key risks: multiple compression, execution shortfall, macro shock."
+    rg_for_spec = rg if has_rev_growth else None
+    if mc > 0 and mc < 50 and rg_for_spec and rg_for_spec >= 15:
+
+        # Year-by-year revenue projection with mandatory deceleration
+        # Cap starting CAGR at 80% — anything above is noise in micro-caps
+        cagr_y1 = min(rg_for_spec / 100.0, 0.80)
+        cagr_y2 = cagr_y1 * 0.70
+        cagr_y3 = cagr_y2 * 0.65
+
+        rev_y1 = rev * (1 + cagr_y1) if rev > 0 else None
+        rev_y2 = rev_y1 * (1 + cagr_y2) if rev_y1 else None
+        rev_y3 = rev_y2 * (1 + cagr_y3) if rev_y2 else None
+
+        # Terminal EV/Revenue multiple at year 3 (compress from current — companies mature)
+        # Cap terminal multiple at 15× — only elite SaaS/tech sustains above that
+        if has_pe and is_profitable:
+            # Growing profitable: model terminal P/E, not EV/Rev
+            # Assume EPS grows at rg * 0.6 (operating leverage, but conservative)
+            eps_cagr = min(rg_for_spec / 100.0 * 0.60, 0.45)
+            pe_terminal = clamp(pe * 0.85, 10.0, 60.0)  # PE compresses as company matures
+            implied_eps_now = price / pe
+            spec_eps = implied_eps_now * (1 + eps_cagr) ** 3
+            spec_mc = (spec_eps * pe_terminal * (shares_m * 1e6 if shares_m else mc * 1e9 / price)) / 1e9
+            # ~5% dilution over 3 yrs for profitable companies
+            dilution_3yr = 1.05
+            spec_shares  = (shares_m * 1e6 * dilution_3yr) if shares_m else None
+            spec_p = clamp(
+                round((spec_mc * 1e9) / spec_shares, 2) if spec_shares else round(price * (1 + eps_cagr)**3 * 0.85, 2),
+                price * 0.90, price * 5.0
             )
-        elif has_ev_rev:
-            spec_p  = round(price * proj_rev_mult * 1.40, 2)  # revenue growth + re-rating
-            spec_r  = (
-                f"Three-year horizon: revenue grows at a decelerating CAGR (~{rg:.0f}%→{rg*0.6:.0f}%) "
-                f"and EV/Revenue re-rates from {ev_r:.1f}× to ~{ev_r*1.4:.1f}× as profitability becomes "
-                f"visible. Stock reaches ${spec_p} — implying a ${mc*(spec_p/price):.1f}B market cap. "
-                f"Requires: no equity dilution, gross margin expansion, and at least one major "
-                f"contract/partnership announcement that brings institutional coverage."
+            spec_r = (
+                f"3-year outlook (P/E model): EPS compounds at ~{eps_cagr*100:.0f}%/yr "
+                f"(revenue growth × operating leverage, decelerating). "
+                f"Terminal P/E compresses to {pe_terminal:.0f}× as the company matures. "
+                f"~5% cumulative dilution (stock comp). "
+                f"Implied market cap: ~${spec_mc:.1f}B. Price target: {fmt_p(spec_p)}. "
+                f"Key risks: multiple compression, macro shock, execution shortfall."
+            )
+        elif has_ev_rev and rev_y3:
+            # Terminal EV/Rev: compress from current, cap at 15×
+            terminal_evr = clamp(ev_r * 0.65, 1.0, 15.0)
+            spec_ev  = rev_y3 * terminal_evr
+            spec_mc  = spec_ev - debt + cash
+            # Pre-profit: ~30-35% cumulative dilution over 3 years
+            dilution_3yr = 1.32
+            spec_shares  = (shares_m * 1e6 * dilution_3yr) if shares_m else None
+            spec_p = clamp(
+                round((spec_mc * 1e9) / spec_shares, 2) if spec_shares else round(price * 2.5, 2),
+                price * 0.80, price * 8.0
+            )
+            spec_r = (
+                f"3-year outlook (EV/Revenue model): revenue projected at "
+                f"${rev:.2f}B → ${rev_y1:.2f}B → ${rev_y2:.2f}B → ${rev_y3:.2f}B "
+                f"(growth decelerates from {rg:.0f}% → {cagr_y1*100:.0f}% → {cagr_y2*100:.0f}% → {cagr_y3*100:.0f}%). "
+                f"Terminal EV/Revenue multiple compresses from {ev_r:.1f}× to {terminal_evr:.1f}× "
+                f"(companies trade at lower multiples as they scale). "
+                f"~32% cumulative share dilution modelled (pre-profit equity raises + stock comp). "
+                f"Implied market cap: ~${spec_mc:.1f}B. Price target: {fmt_p(spec_p)}. "
+                f"Key risks: dilution above forecast, revenue misses, sector multiple compression."
             )
         else:
-            spec_p  = round(price * (1 + cagr)**yrs, 2)
-            spec_r  = (
-                f"Simple revenue CAGR projection over 3 years at {rg:.0f}% growth rate. "
-                f"Assumes stable multiple — upside or downside depends heavily on whether "
-                f"profitability milestones are met."
+            # Revenue heuristic 3-yr: fixed bands with deceleration
+            capped_cagr  = min(rg_for_spec / 100.0, 0.60)
+            # 3yr price = price × (1+cagr)^1 × (1+cagr*0.7)^1 × (1+cagr*0.5)^1 ÷ dilution
+            raw_mult = (1 + capped_cagr) * (1 + capped_cagr * 0.70) * (1 + capped_cagr * 0.50)
+            dilution_3yr = 1.25  # ~25% dilution for no-data pre-profit
+            spec_p = clamp(round(price * raw_mult / dilution_3yr, 2), price * 0.90, price * 5.0)
+            spec_r = (
+                f"3-year outlook (growth heuristic): revenue growth decelerates from "
+                f"{rg:.0f}% → {capped_cagr*100:.0f}% → {capped_cagr*70:.0f}% → {capped_cagr*50:.0f}%. "
+                f"~25% cumulative share dilution assumed (equity raises + stock comp for pre-profit stage). "
+                f"Price target: {fmt_p(spec_p)}. Requires sustained execution and no major dilutive events."
             )
+
         speculative = {
             "price":     spec_p,
             "pct":       pct(spec_p),
