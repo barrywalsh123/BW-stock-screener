@@ -2064,6 +2064,15 @@ def _compute_internal_projections(
                if short_pct and short_pct >= 15
                else f"Operating leverage cuts both ways — margin compression accelerates the EPS shortfall.")
         )
+        bear_assumptions = [
+            f"Implied EPS (consensus): ${implied_eps:.2f}",
+            f"Bear EPS (–30% miss): ${bear_eps:.2f}",
+            f"Forward P/E de-rates: {pe:.0f}× → {pe_floor:.0f}× (–{round((1-pe_floor/pe)*100):.0f}%)",
+            f"Revenue growth decelerates to ~{round(rg*0.4,0) if rg else 'N/A'}%",
+            f"Bear price = ${bear_eps:.2f} EPS × {pe_floor:.0f}× P/E = ${bear_p}",
+            *([ f"Short interest: {short_pct:.0f}% of float — amplifies downside on a miss"] if short_pct and short_pct >= 15 else []),
+            *([ f"Operating margin: {om:.1f}% — cuts both ways on miss"] if is_profitable else []),
+        ]
         base_reason = (
             f"EPS beats consensus by ~6% (${base_eps:.2f} vs implied ${implied_eps:.2f}), "
             f"consistent with modest execution outperformance. "
@@ -2071,6 +2080,15 @@ def _compute_internal_projections(
             + (f"Operating margin of {om:.1f}% provides a cushion for earnings leverage."
                if is_profitable else "Revenue execution stays on track; profitability runway remains intact.")
         )
+        base_assumptions = [
+            f"Implied EPS (consensus): ${implied_eps:.2f}",
+            f"Base EPS (+6% beat): ${base_eps:.2f}",
+            f"Forward P/E holds: {pe:.0f}× (no re-rating)",
+            f"Revenue growth continues at ~{rg:.0f}%" if rg else "Revenue growth: unavailable",
+            f"Base price = ${base_eps:.2f} EPS × {pe:.0f}× P/E = ${base_p}",
+            *([ f"Operating margin: {om:.1f}% — earnings leverage above revenue growth"] if is_profitable else []),
+            *([ f"PEG ratio: {peg_ratio:.2f}"] if peg_ratio else []),
+        ]
         bull_reason = (
             f"EPS beats consensus by ~22% (${bull_eps:.2f} vs implied ${implied_eps:.2f}), "
             f"driven by{(' accelerating revenue (' + str(round(rg*1.3,0)) + '%)' + ',') if rg else ''} "
@@ -2080,6 +2098,15 @@ def _compute_internal_projections(
             + (f"At {om:.1f}% operating margin, each additional point of scale generates outsized EPS leverage."
                if is_profitable else "Margin inflection toward profitability triggers a re-rating from 'growth' to 'growth + earnings' multiple.")
         )
+        bull_assumptions = [
+            f"Implied EPS (consensus): ${implied_eps:.2f}",
+            f"Bull EPS (+22% beat): ${bull_eps:.2f}",
+            f"Forward P/E expands: {pe:.0f}× → {pe_ceil:.0f}× (+35% re-rating)",
+            f"Revenue growth accelerates to ~{round(rg*1.3,0) if rg else 'N/A'}%",
+            f"Bull price = ${bull_eps:.2f} EPS × {pe_ceil:.0f}× P/E = ${bull_p}",
+            *([ f"Rule of 40 = {round((rg or 0)+(om or 0), 0):.0f} {'(strong)' if (rg or 0)+(om or 0)>=40 else '(improving)'}"] if rg or om else []),
+            *([ f"Operating margin expansion from {om:.1f}% drives EPS leverage"] if is_profitable else ["Profitability inflection → multiple re-rating catalyst"]),
+        ]
 
     elif method == "ev_revenue":
         rg_d = rg / 100
@@ -2111,6 +2138,14 @@ def _compute_internal_projections(
             + ("High short interest means a miss triggers outsized selling." if short_pct and short_pct >= 12
                else "Cash burn risk could force a dilutive equity raise, capping upside.")
         )
+        bear_assumptions = [
+            f"Revenue growth decelerates to ~{rg*0.30:.0f}% (miss scenario)",
+            f"EV/Revenue contracts: {ev_r:.1f}× → {bear_evr:.1f}× (–45% de-rating)",
+            f"Bear price = current price × (1 + {rg*0.35/100:.3f}) × 0.55 = ${bear_p}",
+            *([ f"Gross margin: {gm:.0f}% — profitability path in doubt at lower revenue"] if gm else []),
+            *([ f"Short interest: {short_pct:.0f}% — forced selling on miss"] if short_pct and short_pct >= 12 else []),
+            f"Key risk: dilutive equity raise if cash burn continues",
+        ]
         base_reason = (
             f"Revenue growth holds at {rg:.0f}% YoY. EV/Revenue stays at {ev_r:.1f}× — "
             f"the market continues paying this multiple for this growth rate. "
@@ -2118,6 +2153,13 @@ def _compute_internal_projections(
                f"keeping the multiple supported." if gm and gm >= 55
                else "Execution on the current roadmap keeps the valuation intact.")
         )
+        base_assumptions = [
+            f"Revenue growth holds at ~{rg*0.90:.0f}% (slight moderation)",
+            f"EV/Revenue multiple holds: {ev_r:.1f}× (market pays this for this growth rate)",
+            f"Rule of 40 = {r40:.0f}",
+            *([ f"Gross margin: {gm:.0f}% — supports profitability narrative"] if gm and gm >= 55 else []),
+            f"Base price = current price × (1 + {rg*0.90/100:.3f}) = ${base_p}",
+        ]
         bull_reason = (
             f"Revenue growth reaccelerates to ~{rg*1.70:.0f}% through new partnerships, "
             f"contract wins, or market expansion. EV/Revenue re-rates to {bull_evr:.1f}× as "
@@ -2126,6 +2168,14 @@ def _compute_internal_projections(
                f"re-rating from pre-profit to profitable company adds another leg up."
                if gm and gm >= 60 else "A strategic partnership announcement could be the institutional discovery catalyst.")
         )
+        bull_assumptions = [
+            f"Revenue growth accelerates to ~{rg*1.70:.0f}% (new contracts / partnerships)",
+            f"EV/Revenue re-rates: {ev_r:.1f}× → {bull_evr:.1f}× (+50% multiple expansion)",
+            *([ f"Gross margin: {gm:.0f}% — at scale implies high-quality earnings"] if gm and gm >= 60 else []),
+            f"Bull price = current price × (1 + {rg*1.55/100:.3f}) × 1.50 = ${bull_p}",
+            f"Catalyst needed: major partnership, contract win, or institutional coverage initiation",
+            f"Requires: no equity dilution, continued gross margin expansion",
+        ]
 
     elif method == "revenue_heuristic":
         rg_d = rg / 100
@@ -2136,9 +2186,26 @@ def _compute_internal_projections(
             f"Methodology: Revenue momentum model. Revenue growth: {rg:.0f}% YoY. "
             f"P/E and EV/Revenue unavailable; price implied by growth rate scenarios."
         )
-        bear_reason  = f"Growth momentum stalls at {rg*0.25:.0f}% — well below the current {rg:.0f}% run rate. Market discount widens."
+        bear_reason  = f"Growth momentum stalls at ~{rg*0.25:.0f}% — well below the current {rg:.0f}% run rate. Market discount widens."
         base_reason  = f"Revenue growth moderates to ~{rg*0.80:.0f}%, sustaining the current valuation multiple."
         bull_reason  = f"Revenue growth sustains near {rg:.0f}% or accelerates, driving a re-rating of the multiple."
+        bear_assumptions = [
+            f"Revenue growth decelerates to ~{rg*0.25:.0f}% (25% of current pace)",
+            f"No P/E or EV/Revenue data — price scaled by momentum factor",
+            f"Bear price = ${price} × (1 + {rg*0.25/100:.3f}) = ${bear_p}",
+            "Multiple compression assumed as growth disappoints",
+        ]
+        base_assumptions = [
+            f"Revenue growth moderates to ~{rg*0.80:.0f}% (80% of current pace)",
+            f"Valuation multiple holds at current level",
+            f"Base price = ${price} × (1 + {rg*0.80/100:.3f}) = ${base_p}",
+        ]
+        bull_assumptions = [
+            f"Revenue growth sustains at ~{rg*1.50:.0f}% (150% of current pace)",
+            f"Multiple expansion from continued outperformance",
+            f"Bull price = ${price} × (1 + {rg*1.50/100:.3f}) = ${bull_p}",
+            "Catalyst: new contract, partnership, or macro tailwind",
+        ]
 
     else:
         bear_p = round(price * 0.72, 2)
@@ -2151,13 +2218,30 @@ def _compute_internal_projections(
         bear_reason  = "Macro headwinds, sector rotation, or company-specific execution risk. Limited data prevents deeper quantitative analysis."
         base_reason  = "Modest appreciation in line with broad equity market + any fundamental improvement."
         bull_reason  = "Positive catalyst (earnings beat, partnership, contract win) closes the gap to intrinsic value."
+        bear_assumptions = [
+            "Insufficient financial data for quantitative modeling",
+            "Bear scenario: –28% drawdown (typical small/mid-cap distribution)",
+            f"Bear price = ${price} × 0.72 = ${bear_p}",
+            "Assumes macro headwind or sector rotation",
+        ]
+        base_assumptions = [
+            "Base scenario: +10% (in-line with broad equity market)",
+            f"Base price = ${price} × 1.10 = ${base_p}",
+            "Assumes no significant change in fundamentals",
+        ]
+        bull_assumptions = [
+            "Bull scenario: +45% (positive catalyst required)",
+            f"Bull price = ${price} × 1.45 = ${bull_p}",
+            "Assumes earnings beat, contract win, or partnership announcement",
+            "Multiple expansion from discovery / institutional coverage",
+        ]
 
     fundamental = {
         "model":            method,
         "methodology_note": methodology_note,
-        "bear": {"price": bear_p, "pct": pct(bear_p), "reasoning": bear_reason},
-        "base": {"price": base_p, "pct": pct(base_p), "reasoning": base_reason},
-        "bull": {"price": bull_p, "pct": pct(bull_p), "reasoning": bull_reason},
+        "bear": {"price": bear_p, "pct": pct(bear_p), "reasoning": bear_reason, "assumptions": bear_assumptions},
+        "base": {"price": base_p, "pct": pct(base_p), "reasoning": base_reason, "assumptions": base_assumptions},
+        "bull": {"price": bull_p, "pct": pct(bull_p), "reasoning": bull_reason, "assumptions": bull_assumptions},
     }
 
     # ── Speculative / asymmetric upside (3-year horizon) ──

@@ -294,23 +294,30 @@ td{padding:8px 12px;font-size:12px;vertical-align:middle;}
 .sq-about-body{font-size:13px;color:#94b4cc;line-height:1.8;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px;}
 .sq-comps-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px;}
 @media(max-width:700px){.sq-proj-grid,.sq-comps-grid{grid-template-columns:1fr;} .sq-stats-grid{grid-template-columns:1fr 1fr;}}
-/* ── DETAIL PANEL PROJECTION CARDS (clickable assumptions) ── */
-.dp-proj-grid{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
-.dp-proj-card{flex:1;min-width:130px;border-radius:10px;border:1px solid var(--border);padding:14px 12px;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;user-select:none;}
-.dp-proj-card:hover{background:rgba(56,189,248,.06);}
-.dp-proj-card.expanded{border-color:currentColor;}
-.dp-proj-card-top{text-align:center;}
-.dp-proj-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:8px;}
-.dp-proj-price{font-size:20px;font-weight:900;line-height:1;margin-bottom:4px;}
-.dp-proj-pct{font-size:13px;font-weight:700;margin-bottom:6px;}
-.dp-proj-hint{font-size:9px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;}
-.dp-proj-reasoning{display:none;font-size:11px;line-height:1.6;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);color:#94b4cc;}
-.dp-proj-card.expanded .dp-proj-reasoning{display:block;}
-.dp-proj-methodology{font-size:10px;color:var(--muted);line-height:1.55;margin-bottom:14px;padding:8px 12px;background:rgba(56,189,248,.05);border-left:2px solid var(--accent);border-radius:0 6px 6px 0;}
+/* ── DETAIL PANEL PROJECTION CARDS (clickable → full-width expand) ── */
+.dp-proj-row{display:flex;gap:8px;margin-bottom:0;}
+.dp-proj-card{flex:1;min-width:0;border-radius:10px;border:2px solid transparent;padding:12px 10px;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;user-select:none;text-align:center;}
+.dp-proj-card:hover{background:rgba(255,255,255,.04);}
+.dp-proj-card.active{background:rgba(255,255,255,.05);}
+.dp-proj-label{font-size:9px;text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:6px;}
+.dp-proj-price{font-size:19px;font-weight:900;line-height:1;margin-bottom:3px;}
+.dp-proj-pct{font-size:12px;font-weight:700;margin-bottom:5px;}
+.dp-proj-hint{font-size:9px;color:var(--muted);letter-spacing:.3px;}
+.dp-proj-expand{display:none;border-radius:10px;border:1px solid var(--border);padding:16px 18px;background:#0b1f33;margin-top:8px;animation:fadeSlideIn .15s ease;}
+.dp-proj-expand.show{display:block;}
+@keyframes fadeSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.dp-proj-expand-narrative{font-size:12px;color:#b0cce0;line-height:1.7;margin-bottom:14px;}
+.dp-proj-assumptions{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:5px;}
+.dp-proj-assumptions li{font-size:11px;color:#7a9ab5;line-height:1.5;padding:5px 10px;background:rgba(255,255,255,.03);border-radius:6px;display:flex;align-items:flex-start;gap:6px;}
+.dp-proj-assumptions li::before{content:'→';color:var(--accent);font-size:10px;margin-top:1px;flex-shrink:0;}
+.dp-proj-methodology{font-size:10px;color:var(--muted);line-height:1.55;margin-bottom:12px;padding:8px 12px;background:rgba(56,189,248,.05);border-left:2px solid var(--accent);border-radius:0 6px 6px 0;}
 .dp-spec-box{margin-top:14px;padding:14px 16px;background:linear-gradient(135deg,rgba(56,189,248,.05),rgba(139,92,246,.07));border:1px solid rgba(139,92,246,.3);border-radius:10px;cursor:pointer;}
 .dp-spec-box:hover{border-color:rgba(139,92,246,.6);}
-.dp-spec-reasoning{display:none;font-size:11px;color:#b8a8d0;line-height:1.6;margin-top:10px;padding-top:10px;border-top:1px solid rgba(139,92,246,.2);}
-.dp-spec-box.expanded .dp-spec-reasoning{display:block;}
+.dp-spec-expand{display:none;margin-top:10px;padding-top:10px;border-top:1px solid rgba(139,92,246,.2);}
+.dp-spec-expand.show{display:block;}
+.dp-spec-expand p{font-size:11px;color:#b8a8d0;line-height:1.65;margin-bottom:10px;}
+.dp-spec-expand ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;}
+.dp-spec-expand li{font-size:11px;color:#9080b8;padding:4px 8px;background:rgba(139,92,246,.07);border-radius:5px;}
 
 /* OPTIMAL PLAY */
 .op-stance{border-radius:12px;padding:20px 22px;margin-bottom:22px;border:1px solid;}
@@ -1493,8 +1500,22 @@ async function mountThesisBlock(wrap) {
 }
 
 // ── DETAIL PANEL: PROJECTIONS TAB (lazy, per-ticker) ──
-function toggleDPProjCard(card) {
-  card.classList.toggle('expanded');
+function selectDPProjCard(card, expandId) {
+  // toggle same card off, or switch to new one
+  const container = card.closest('.dp-proj-section');
+  const allCards   = container.querySelectorAll('.dp-proj-card');
+  const allExpands = container.querySelectorAll('.dp-proj-expand');
+  const expand = document.getElementById(expandId);
+  const isActive = card.classList.contains('active');
+
+  allCards.forEach(c => { c.classList.remove('active'); c.style.borderColor = 'transparent'; });
+  allExpands.forEach(e => e.classList.remove('show'));
+
+  if (!isActive) {
+    card.classList.add('active');
+    card.style.borderColor = card.dataset.color;
+    if (expand) expand.classList.add('show');
+  }
 }
 
 async function mountDPProjections(wrap) {
@@ -1511,10 +1532,15 @@ async function mountDPProjections(wrap) {
     const cur = d.price ? `$${d.price}` : '—';
     const pf  = p => p != null ? `${p >= 0 ? '+' : ''}${p}%` : '—';
     const df  = p => p ? `$${p}` : '—';
+    const uid = ticker + '_' + Date.now();
+
+    const assumptionsList = (arr) => arr && arr.length
+      ? `<ul class="dp-proj-assumptions">${arr.map(a=>`<li>${a}</li>`).join('')}</ul>`
+      : '';
 
     let html = '';
 
-    // ── Our Model ──
+    // ── Our Fundamental Model ──
     if (fp) {
       const modelLabel = {
         pe_beat_miss:      'Beat/Miss vs Consensus · Forward P/E',
@@ -1524,45 +1550,67 @@ async function mountDPProjections(wrap) {
       }[fp.model] || fp.model;
 
       html += `
-        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-          <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;">🧮 Fundamental Model</h4>
-          <span style="font-size:10px;color:var(--accent);font-weight:700;">${modelLabel}</span>
-          <span style="font-size:10px;color:var(--muted);margin-left:auto;">Current: ${cur} · Click cards to see assumptions</span>
-        </div>
-        <div class="dp-proj-methodology">${fp.methodology_note}</div>
-        <div class="dp-proj-grid">
-          <div class="dp-proj-card" style="color:#f87171;" onclick="toggleDPProjCard(this)">
-            <div class="dp-proj-card-top">
-              <div class="dp-proj-label" style="color:#f87171;">🐻 Bear Case</div>
+        <div class="dp-proj-section">
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
+            <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;margin:0;">🧮 Fundamental Model</h4>
+            <span style="font-size:10px;color:var(--accent);font-weight:700;">${modelLabel}</span>
+            <span style="font-size:10px;color:var(--muted);margin-left:auto;">Current: ${cur}</span>
+          </div>
+          <div class="dp-proj-methodology">${fp.methodology_note}</div>
+
+          <div style="font-size:10px;color:var(--muted);margin-bottom:8px;text-align:center;letter-spacing:.3px;">Click a scenario to see full reasoning &amp; assumptions ▾</div>
+          <div class="dp-proj-row" style="margin-bottom:8px;">
+
+            <div class="dp-proj-card" data-color="#f87171"
+                 onclick="selectDPProjCard(this,'${uid}_bear')">
+              <div class="dp-proj-label" style="color:#f87171;">🐻 Bear</div>
               <div class="dp-proj-price" style="color:#f87171;">${df(fp.bear.price)}</div>
               <div class="dp-proj-pct"   style="color:#f87171;">${pf(fp.bear.pct)}</div>
-              <div class="dp-proj-hint">tap for reasoning ▾</div>
+              <div class="dp-proj-hint">▾ tap</div>
             </div>
-            <div class="dp-proj-reasoning">${fp.bear.reasoning}</div>
-          </div>
-          <div class="dp-proj-card" style="color:#fbbf24;" onclick="toggleDPProjCard(this)">
-            <div class="dp-proj-card-top">
-              <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Base Case</div>
+
+            <div class="dp-proj-card" data-color="#fbbf24"
+                 onclick="selectDPProjCard(this,'${uid}_base')">
+              <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Base</div>
               <div class="dp-proj-price" style="color:#fbbf24;">${df(fp.base.price)}</div>
               <div class="dp-proj-pct"   style="color:#fbbf24;">${pf(fp.base.pct)}</div>
-              <div class="dp-proj-hint">tap for reasoning ▾</div>
+              <div class="dp-proj-hint">▾ tap</div>
             </div>
-            <div class="dp-proj-reasoning">${fp.base.reasoning}</div>
-          </div>
-          <div class="dp-proj-card" style="color:#4ade80;" onclick="toggleDPProjCard(this)">
-            <div class="dp-proj-card-top">
-              <div class="dp-proj-label" style="color:#4ade80;">🐂 Bull Case</div>
+
+            <div class="dp-proj-card" data-color="#4ade80"
+                 onclick="selectDPProjCard(this,'${uid}_bull')">
+              <div class="dp-proj-label" style="color:#4ade80;">🐂 Bull</div>
               <div class="dp-proj-price" style="color:#4ade80;">${df(fp.bull.price)}</div>
               <div class="dp-proj-pct"   style="color:#4ade80;">${pf(fp.bull.pct)}</div>
-              <div class="dp-proj-hint">tap for reasoning ▾</div>
+              <div class="dp-proj-hint">▾ tap</div>
             </div>
-            <div class="dp-proj-reasoning">${fp.bull.reasoning}</div>
+          </div>
+
+          <div id="${uid}_bear" class="dp-proj-expand" style="border-color:rgba(248,113,113,.3);">
+            <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:8px;">🐻 Bear Case — ${df(fp.bear.price)} (${pf(fp.bear.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.bear.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.bear.assumptions)}
+          </div>
+
+          <div id="${uid}_base" class="dp-proj-expand" style="border-color:rgba(251,191,36,.3);">
+            <div style="font-size:11px;font-weight:700;color:#fbbf24;margin-bottom:8px;">⚖️ Base Case — ${df(fp.base.price)} (${pf(fp.base.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.base.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.base.assumptions)}
+          </div>
+
+          <div id="${uid}_bull" class="dp-proj-expand" style="border-color:rgba(74,222,128,.3);">
+            <div style="font-size:11px;font-weight:700;color:#4ade80;margin-bottom:8px;">🐂 Bull Case — ${df(fp.bull.price)} (${pf(fp.bull.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.bull.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.bull.assumptions)}
           </div>
         </div>`;
 
       if (sp) {
         html += `
-          <div class="dp-spec-box" onclick="this.classList.toggle('expanded')">
+          <div class="dp-spec-box" onclick="this.querySelector('.dp-spec-expand').classList.toggle('show')">
             <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
               <div>
                 <div style="font-size:10px;color:#c084fc;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:2px;">🚀 Speculative — ${sp.timeframe} horizon</div>
@@ -1570,39 +1618,39 @@ async function mountDPProjections(wrap) {
               </div>
               <div style="font-size:10px;color:var(--muted);">Small/mid-cap asymmetric upside · Tap for reasoning</div>
             </div>
-            <div class="dp-spec-reasoning">${sp.reasoning}</div>
+            <div class="dp-spec-expand">
+              <p>${sp.reasoning}</p>
+              <ul>${[
+                'Assumes sustained above-market execution and no material dilution',
+                'Multiple scenarios: decelerating revenue CAGR with modest re-rating',
+                'Key risks: macro shock, competition, execution shortfall',
+              ].map(a=>`<li>→ ${a}</li>`).join('')}</ul>
+            </div>
           </div>`;
       }
     }
 
     // ── Analyst Targets ──
-    const hasTargets = d.target_low || d.target_median || d.target_high;
     html += `
-      <div style="display:flex;align-items:baseline;gap:10px;margin:18px 0 10px;flex-wrap:wrap;">
-        <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;">🎯 Analyst Targets (1-Year)</h4>
+      <div style="display:flex;align-items:baseline;gap:10px;margin:20px 0 8px;flex-wrap:wrap;">
+        <h4 style="font-size:12px;color:#e2f0ff;font-weight:700;margin:0;">🎯 Analyst Price Targets (1-Year)</h4>
         <span style="font-size:10px;color:var(--muted);">${d.target_source === 'analyst' ? `${d.analyst_count||'?'} analysts · ${(d.recommendation||'').replace('_',' ').toUpperCase()}` : 'No analyst coverage — heuristic fallback'}</span>
       </div>
-      <div class="dp-proj-grid">
-        <div class="dp-proj-card" style="color:#f87171;">
-          <div class="dp-proj-card-top">
-            <div class="dp-proj-label" style="color:#f87171;">🐻 Low Target</div>
-            <div class="dp-proj-price" style="color:#f87171;">${df(d.target_low)}</div>
-            ${d.price && d.target_low ? `<div class="dp-proj-pct" style="color:#f87171;">${pf(Math.round((d.target_low/d.price-1)*1000)/10)}</div>` : ''}
-          </div>
+      <div class="dp-proj-row">
+        <div class="dp-proj-card" style="border-color:rgba(248,113,113,.25);">
+          <div class="dp-proj-label" style="color:#f87171;">🐻 Low Target</div>
+          <div class="dp-proj-price" style="color:#f87171;">${df(d.target_low)}</div>
+          ${d.price && d.target_low ? `<div class="dp-proj-pct" style="color:#f87171;">${pf(Math.round((d.target_low/d.price-1)*1000)/10)}</div>` : ''}
         </div>
-        <div class="dp-proj-card" style="color:#fbbf24;">
-          <div class="dp-proj-card-top">
-            <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Median Target</div>
-            <div class="dp-proj-price" style="color:#fbbf24;">${df(d.target_median)}</div>
-            ${d.price && d.target_median ? `<div class="dp-proj-pct" style="color:#fbbf24;">${pf(Math.round((d.target_median/d.price-1)*1000)/10)}</div>` : ''}
-          </div>
+        <div class="dp-proj-card" style="border-color:rgba(251,191,36,.25);">
+          <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Median Target</div>
+          <div class="dp-proj-price" style="color:#fbbf24;">${df(d.target_median)}</div>
+          ${d.price && d.target_median ? `<div class="dp-proj-pct" style="color:#fbbf24;">${pf(Math.round((d.target_median/d.price-1)*1000)/10)}</div>` : ''}
         </div>
-        <div class="dp-proj-card" style="color:#4ade80;">
-          <div class="dp-proj-card-top">
-            <div class="dp-proj-label" style="color:#4ade80;">🐂 High Target</div>
-            <div class="dp-proj-price" style="color:#4ade80;">${df(d.target_high)}</div>
-            ${d.price && d.target_high ? `<div class="dp-proj-pct" style="color:#4ade80;">${pf(Math.round((d.target_high/d.price-1)*1000)/10)}</div>` : ''}
-          </div>
+        <div class="dp-proj-card" style="border-color:rgba(74,222,128,.25);">
+          <div class="dp-proj-label" style="color:#4ade80;">🐂 High Target</div>
+          <div class="dp-proj-price" style="color:#4ade80;">${df(d.target_high)}</div>
+          ${d.price && d.target_high ? `<div class="dp-proj-pct" style="color:#4ade80;">${pf(Math.round((d.target_high/d.price-1)*1000)/10)}</div>` : ''}
         </div>
       </div>`;
 
@@ -1612,7 +1660,7 @@ async function mountDPProjections(wrap) {
       const rl = rm <= 1.5 ? 'Strong Buy' : rm <= 2.5 ? 'Buy' : rm <= 3.5 ? 'Hold' : rm <= 4.5 ? 'Sell' : 'Strong Sell';
       const rc = rm <= 2 ? 'var(--green)' : rm <= 3 ? 'var(--yellow)' : 'var(--red)';
       html += `
-        <div class="sq-bar-wrap" style="margin-top:4px;">
+        <div class="sq-bar-wrap" style="margin-top:8px;">
           <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:6px;">
             <span style="color:var(--green);">Strong Buy</span>
             <span style="font-weight:800;color:${rc};">${rl} (${rm.toFixed(1)})</span>
@@ -2813,6 +2861,9 @@ document.addEventListener('input', e => {
 
     // projections
     let projHtml = '';
+    const assumptionsList = arr => arr && arr.length
+      ? `<ul class="dp-proj-assumptions">${arr.map(a=>`<li>${a}</li>`).join('')}</ul>` : '';
+    const sqUid = d.ticker + '_sq';
 
     // ── Section 1: Our Fundamental Model ──
     const fp = d.projections && d.projections.fundamental;
@@ -2825,31 +2876,50 @@ document.addEventListener('input', e => {
       }[fp.model] || fp.model;
 
       projHtml += `
-        <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px;flex-wrap:wrap;">
-          <span class="sq-section-title" style="margin:0;">🧮 Our Fundamental Model</span>
-          <span style="font-size:11px;color:var(--accent);font-weight:700;">${modelLabel}</span>
-        </div>
-        <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:16px;padding:10px 14px;background:rgba(56,189,248,.06);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;">
-          ${fp.methodology_note}
-        </div>
-        <div class="sq-proj-grid" style="margin-bottom:0;">
-          <div class="sq-proj-card" style="border-color:rgba(248,113,113,.4);text-align:left;">
-            <div class="sq-proj-label" style="color:#f87171;">🐻 Bear Case</div>
-            <div class="sq-proj-price" style="color:#f87171;">${df(fp.bear.price)}</div>
-            <div class="sq-proj-pct"   style="color:#f87171;margin-bottom:10px;">${pf(fp.bear.pct)}</div>
-            <div style="font-size:11px;color:#c4a8a8;line-height:1.55;">${fp.bear.reasoning}</div>
+        <div class="dp-proj-section">
+          <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px;flex-wrap:wrap;">
+            <span class="sq-section-title" style="margin:0;">🧮 Our Fundamental Model</span>
+            <span style="font-size:11px;color:var(--accent);font-weight:700;">${modelLabel}</span>
           </div>
-          <div class="sq-proj-card" style="border-color:rgba(251,191,36,.4);text-align:left;">
-            <div class="sq-proj-label" style="color:#fbbf24;">⚖️ Base Case</div>
-            <div class="sq-proj-price" style="color:#fbbf24;">${df(fp.base.price)}</div>
-            <div class="sq-proj-pct"   style="color:#fbbf24;margin-bottom:10px;">${pf(fp.base.pct)}</div>
-            <div style="font-size:11px;color:#c4b98a;line-height:1.55;">${fp.base.reasoning}</div>
+          <div class="dp-proj-methodology">${fp.methodology_note}</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:8px;text-align:center;">Click a scenario to expand reasoning &amp; assumptions ▾</div>
+          <div class="dp-proj-row" style="margin-bottom:8px;">
+            <div class="dp-proj-card" data-color="#f87171" onclick="selectDPProjCard(this,'${sqUid}_bear')">
+              <div class="dp-proj-label" style="color:#f87171;">🐻 Bear</div>
+              <div class="dp-proj-price" style="color:#f87171;">${df(fp.bear.price)}</div>
+              <div class="dp-proj-pct"   style="color:#f87171;">${pf(fp.bear.pct)}</div>
+              <div class="dp-proj-hint">▾ tap</div>
+            </div>
+            <div class="dp-proj-card" data-color="#fbbf24" onclick="selectDPProjCard(this,'${sqUid}_base')">
+              <div class="dp-proj-label" style="color:#fbbf24;">⚖️ Base</div>
+              <div class="dp-proj-price" style="color:#fbbf24;">${df(fp.base.price)}</div>
+              <div class="dp-proj-pct"   style="color:#fbbf24;">${pf(fp.base.pct)}</div>
+              <div class="dp-proj-hint">▾ tap</div>
+            </div>
+            <div class="dp-proj-card" data-color="#4ade80" onclick="selectDPProjCard(this,'${sqUid}_bull')">
+              <div class="dp-proj-label" style="color:#4ade80;">🐂 Bull</div>
+              <div class="dp-proj-price" style="color:#4ade80;">${df(fp.bull.price)}</div>
+              <div class="dp-proj-pct"   style="color:#4ade80;">${pf(fp.bull.pct)}</div>
+              <div class="dp-proj-hint">▾ tap</div>
+            </div>
           </div>
-          <div class="sq-proj-card" style="border-color:rgba(74,222,128,.4);text-align:left;">
-            <div class="sq-proj-label" style="color:#4ade80;">🐂 Bull Case</div>
-            <div class="sq-proj-price" style="color:#4ade80;">${df(fp.bull.price)}</div>
-            <div class="sq-proj-pct"   style="color:#4ade80;margin-bottom:10px;">${pf(fp.bull.pct)}</div>
-            <div style="font-size:11px;color:#9ac4a8;line-height:1.55;">${fp.bull.reasoning}</div>
+          <div id="${sqUid}_bear" class="dp-proj-expand" style="border-color:rgba(248,113,113,.3);">
+            <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:8px;">🐻 Bear Case — ${df(fp.bear.price)} (${pf(fp.bear.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.bear.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.bear.assumptions)}
+          </div>
+          <div id="${sqUid}_base" class="dp-proj-expand" style="border-color:rgba(251,191,36,.3);">
+            <div style="font-size:11px;font-weight:700;color:#fbbf24;margin-bottom:8px;">⚖️ Base Case — ${df(fp.base.price)} (${pf(fp.base.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.base.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.base.assumptions)}
+          </div>
+          <div id="${sqUid}_bull" class="dp-proj-expand" style="border-color:rgba(74,222,128,.3);">
+            <div style="font-size:11px;font-weight:700;color:#4ade80;margin-bottom:8px;">🐂 Bull Case — ${df(fp.bull.price)} (${pf(fp.bull.pct)})</div>
+            <div class="dp-proj-expand-narrative">${fp.bull.reasoning}</div>
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Key Assumptions</div>
+            ${assumptionsList(fp.bull.assumptions)}
           </div>
         </div>`;
     }
